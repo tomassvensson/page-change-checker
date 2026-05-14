@@ -1,0 +1,42 @@
+{
+  "databasePath": "data/page-change-checker.sqlite",
+  "browser": {
+    "headless": true,
+    "userDataDir": "data/user-data",
+    "timeoutMs": 30000,
+    "waitUntil": "domcontentloaded"
+  },
+  "schedule": {
+    "intervalHours": 24
+  },
+  "login": {
+    "interactive": true,
+    "waitTimeoutMs": 600000
+  },
+  "urls": [
+    {
+      "url": "https://www.eurojackpot.de/",
+      "selectors": [
+        {
+          "cssPath": "app-jackpot-teaser div.jackpot-teaser div div div.sum",
+          "elementIndex": 0,
+          "compareMode": "innerText",
+          "initialLastContent": "101"
+        }
+      ],
+      "loginChecks": []
+    },
+    {
+      "url": "https://www.finanzen.net/insidertrades/siemens_energy",
+      "selectors": [
+        {
+          "cssPath": "html.sg-dark-scheme body.page-layout.optin-monster-hide.optin-monster-hide--active main.page-content section.page-content__container.page-content__container--2-cols div.page-content__leading article.page-content__item.page-content__item--space div.horizontal-scrolling table.table.table--col-3-text-align-right.table--col-4-text-align-right tbody.table__tbody tr.table__tr",
+          "elementIndex": 0,
+          "compareMode": "innerHTML",
+          "initialLastContent": "<td class=\"table__td\">09.04.26</td><td class=\"table__td\"><a href=\"/insiderdaten/?nachname=Kensbock%2C+Robert&amp;vorname=\" rel=\"nofollow\">Kensbock, Robert, </a></td><td class=\"table__td\">500</td><td class=\"table__td\">163,54</td><td class=\"table__td\">Verkauf</td><td class=\"table__td font-whitespace-nowrap padding-horizontal-0.00\"><a href=\"/insidertrades/siemens_energy@pkId_76651\" rel=\"nofollow\">Details <span class=\"icon icon--arrow-double-right icon--scale-0625\"></span></a></td>"
+        }
+      ],
+      "loginChecks": []
+    }
+  ]
+}
