@@ -4,7 +4,25 @@
     "headless": true,
     "userDataDir": "data/user-data",
     "timeoutMs": 30000,
-    "waitUntil": "domcontentloaded"
+    "waitUntil": "domcontentloaded",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "locale": "de-DE",
+    "timezoneId": "Europe/Berlin",
+    "extraHTTPHeaders": {
+      "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
+    },
+    "cookieConsent": {
+      "enabled": true,
+      "timeoutMs": 3000,
+      "buttonTextRegex": "^(Alle akzeptieren|Akzeptieren|Zustimmen|Einverstanden|Accept all|Accept|I agree|Agree)$",
+      "cssSelectors": [
+        "#onetrust-accept-btn-handler",
+        "button[id*=\"accept\"]",
+        "button[class*=\"accept\"]",
+        "[data-testid*=\"accept\"]",
+        "[aria-label*=\"accept\"]"
+      ]
+    }
   },
   "schedule": {
     "intervalHours": 24
@@ -15,13 +33,12 @@
   },
   "urls": [
     {
-      "url": "https://www.eurojackpot.de/",
+      "url": "https://www.kleinanzeigen.de/pro/salzmann",
       "selectors": [
         {
-          "cssPath": "app-jackpot-teaser div.jackpot-teaser div div div.sum",
+          "cssPath": "div.my-large div.list-none a.items-center",
           "elementIndex": 0,
-          "compareMode": "innerText",
-          "initialLastContent": "101"
+          "compareMode": "innerText"
         }
       ],
       "loginChecks": []

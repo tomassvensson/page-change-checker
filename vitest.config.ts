@@ -4,7 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**'],
+    include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
+    exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**', '.trunk/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
@@ -17,6 +18,7 @@ export default defineConfig({
       exclude: [
         'dist/**',
         'tests/**',
+        '.trunk/**',
         'playwright.config.ts',
         'eslint.config.js',
         'vitest.config.ts',

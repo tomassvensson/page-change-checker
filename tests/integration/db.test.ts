@@ -63,7 +63,17 @@ function makeConfig(): AppConfig {
       headless: true,
       userDataDir: 'unused-user-data',
       timeoutMs: 1000,
-      waitUntil: 'domcontentloaded'
+      waitUntil: 'domcontentloaded',
+      userAgent: 'test-agent',
+      locale: 'de-DE',
+      timezoneId: 'Europe/Berlin',
+      extraHTTPHeaders: {},
+      cookieConsent: {
+        enabled: true,
+        timeoutMs: 1000,
+        buttonTextRegex: 'Accept',
+        cssSelectors: []
+      }
     },
     schedule: { intervalHours: 24 },
     login: { interactive: false, waitTimeoutMs: 1000 },

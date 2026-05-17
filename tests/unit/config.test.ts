@@ -13,6 +13,8 @@ describe('parseConfig', () => {
 
     expect(config.databasePath).toBe('data/page-change-checker.sqlite');
     expect(config.browser.headless).toBe(true);
+    expect(config.browser.userAgent).toContain('Chrome/');
+    expect(config.browser.cookieConsent.enabled).toBe(true);
     expect(config.schedule.intervalHours).toBe(24);
     expect(config.urls[0]?.selectors[0]).toMatchObject({
       cssPath: '.price',
