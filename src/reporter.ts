@@ -1,71 +1,71 @@
 import { createTwoFilesPatch } from 'diff';
 
-import type { UrlScrapeResult } from './types.js';
+import type { LoginCheckResult, TargetResult, UrlScrapeResult } from './types.js';
 
 export function formatResults(results: UrlScrapeResult[]): string {
-  const sections = results.map((result) => {
-    const lines = [
-      `URL: ${result.url}`,
-      `HTTP status: ${result.httpStatus ?? 'unavailable'}`,
-      `Login necessary: ${result.loginNeeded ? 'yes' : 'no'}`
-    ];
+  return results.map(formatUrlResult).join('\n\n');
+}
 
-    if (result.error) {
-      lines.push(`Problem: ${result.error}`);
-    }
+function formatUrlResult(result: UrlScrapeResult): string {
+  return [
+    ...formatUrlHeader(result),
+    ...result.loginChecks.flatMap(formatLoginCheck),
+    ...result.targets.flatMap(formatTarget)
+  ].join('\n');
+}
 
-    for (const check of result.loginChecks) {
-      lines.push(
-        `Login check: ${check.cssPath} [${check.elementIndex}] exists=${check.exists ? 'yes' : 'no'} matched=${
-          check.matched ? 'yes' : 'no'
-        }`
-      );
-      if (check.description) {
-        lines.push(`  after-login content: ${check.description}`);
-      }
-      if (check.expectedContent) {
-        lines.push(`  expected: ${check.expectedContent}`);
-      }
-      if (check.actualContent !== null) {
-        lines.push(`  actual: ${check.actualContent}`);
-      }
-    }
+function formatUrlHeader(result: UrlScrapeResult): string[] {
+  return [
+    `URL: ${result.url}`,
+    `HTTP status: ${result.httpStatus ?? 'unavailable'}`,
+    `Login necessary: ${result.loginNeeded ? 'yes' : 'no'}`,
+    ...(result.error ? [`Problem: ${result.error}`] : [])
+  ];
+}
 
-    for (const target of result.targets) {
-      lines.push(
-        `Selector: ${target.cssPath} [${target.elementIndex}] mode=${target.compareMode} exists=${
-          target.exists ? 'yes' : 'no'
-        } matches=${target.matchCount}`
-      );
+function formatLoginCheck(check: LoginCheckResult): string[] {
+  return [
+    `Login check: ${check.cssPath} [${check.elementIndex}] exists=${yesNo(check.exists)} matched=${yesNo(
+      check.matched
+    )}`,
+    ...(check.description ? [`  after-login content: ${check.description}`] : []),
+    ...(check.expectedContent ? [`  expected: ${check.expectedContent}`] : []),
+    ...(check.actualContent !== null ? [`  actual: ${check.actualContent}`] : [])
+  ];
+}
 
-      if (!target.exists) {
-        lines.push('  problem: selector did not match the requested element');
-        continue;
-      }
+function formatTarget(target: TargetResult): string[] {
+  const header = `Selector: ${target.cssPath} [${target.elementIndex}] mode=${target.compareMode} exists=${yesNo(
+    target.exists
+  )} matches=${target.matchCount}`;
 
-      if (target.changed === true) {
-        lines.push('  changed: yes');
-        lines.push(`  old: ${target.oldContent ?? ''}`);
-        lines.push(`  new: ${target.newContent ?? ''}`);
-        lines.push(
-          createTwoFilesPatch(
-            'old',
-            'new',
-            target.oldContent ?? '',
-            target.newContent ?? ''
-          ).trimEnd()
-        );
-      } else if (target.changed === false) {
-        lines.push('  changed: no');
-        lines.push(`  old: ${target.oldContent ?? ''}`);
-      } else {
-        lines.push('  changed: baseline created');
-        lines.push(`  new: ${target.newContent ?? ''}`);
-      }
-    }
+  if (!target.exists) {
+    return [header, '  problem: selector did not match the requested element'];
+  }
 
-    return lines.join('\n');
-  });
+  if (target.changed === true) {
+    return [header, ...formatChangedTarget(target)];
+  }
 
-  return sections.join('\n\n');
+  if (target.changed === false) {
+    return [header, '  changed: no', `  old: ${target.oldContent ?? ''}`];
+  }
+
+  return [header, '  changed: baseline created', `  new: ${target.newContent ?? ''}`];
+}
+
+function formatChangedTarget(target: TargetResult): string[] {
+  const oldContent = target.oldContent ?? '';
+  const newContent = target.newContent ?? '';
+
+  return [
+    '  changed: yes',
+    `  old: ${oldContent}`,
+    `  new: ${newContent}`,
+    createTwoFilesPatch('old', 'new', oldContent, newContent).trimEnd()
+  ];
+}
+
+function yesNo(value: boolean): 'yes' | 'no' {
+  return value ? 'yes' : 'no';
 }
