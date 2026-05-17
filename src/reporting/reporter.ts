@@ -32,7 +32,7 @@ function formatLoginCheck(check: LoginCheckResult): string[] {
     `Login check: ${check.cssPath} [${check.elementIndex}] exists=${yesNo(check.exists)} matched=${yesNo(check.matched)}`,
     ...(check.description ? [`  after-login content: ${check.description}`] : []),
     ...(check.expectedContent ? [`  expected: ${check.expectedContent}`] : []),
-    ...(check.actualContent !== null ? [`  actual: ${check.actualContent}`] : [])
+    ...(check.actualContent === null ? [] : [`  actual: ${check.actualContent}`])
   ];
 }
 

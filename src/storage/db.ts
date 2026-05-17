@@ -83,7 +83,9 @@ function addColumnIfMissing(
 }
 
 function effectiveNormalize(appConfig: AppConfig, selectorConfig: SelectorConfig): NormalizeConfig {
-  return { ...appConfig.normalize, ...(selectorConfig.normalizeOverride ?? {}) };
+  return selectorConfig.normalizeOverride
+    ? { ...appConfig.normalize, ...selectorConfig.normalizeOverride }
+    : { ...appConfig.normalize };
 }
 
 export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
@@ -132,9 +134,9 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
         const norm = effectiveNormalize(config, selector);
         const ignore = selector.ignorePatterns ?? [];
         const initialContent =
-          selector.initialLastContent != null
-            ? processContent(selector.initialLastContent, norm, ignore)
-            : null;
+          selector.initialLastContent == null
+            ? null
+            : processContent(selector.initialLastContent, norm, ignore);
 
         upsertTarget.run({
           urlId,
@@ -239,10 +241,9 @@ export function resolveUrls(db: SqliteDatabase, config: AppConfig): LoadedUrl[] 
             s.compareMode === target.compareMode
         );
 
-        const normalizeConfig: typeof config.normalize = {
-          ...config.normalize,
-          ...(selCfg?.normalizeOverride ?? {})
-        };
+        const normalizeConfig: NormalizeConfig = selCfg?.normalizeOverride
+          ? { ...config.normalize, ...selCfg.normalizeOverride }
+          : { ...config.normalize };
 
         return {
           ...target,

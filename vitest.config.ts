@@ -10,10 +10,10 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       thresholds: {
-        lines: 50,
-        functions: 50,
-        branches: 50,
-        statements: 50
+        lines: 81,
+        functions: 81,
+        branches: 81,
+        statements: 81
       },
       exclude: [
         'dist/**',
@@ -30,7 +30,12 @@ export default defineConfig({
         'src/core/errors.ts',
         'src/scheduler.ts',
         'src/scraper.ts',
-        'src/types.ts'
+        'src/types.ts',
+        // barrel re-export shims — zero statements, not meaningful to measure
+        'src/config.ts',
+        'src/db.ts',
+        'src/pageReader.ts',
+        'src/reporter.ts'
       ]
     }
   }
