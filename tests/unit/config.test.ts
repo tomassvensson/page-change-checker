@@ -1,4 +1,4 @@
-import { parseConfig } from '../../src/config.js';
+import { parseConfig } from '../../src/cli/config.js';
 
 describe('parseConfig', () => {
   it('applies defaults and validates selector configuration', () => {

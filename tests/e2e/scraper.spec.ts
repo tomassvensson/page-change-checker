@@ -5,9 +5,9 @@ import { join } from 'node:path';
 
 import { test, expect } from '@playwright/test';
 
-import { loadEnabledUrls, openDatabase, seedFromConfig } from '../../src/db.js';
-import { scrapeAll } from '../../src/scraper.js';
-import type { AppConfig } from '../../src/types.js';
+import { scrapeAll } from '../../src/browser/scraper.js';
+import type { AppConfig } from '../../src/core/types.js';
+import { openDatabase, resolveUrls, seedFromConfig } from '../../src/storage/db.js';
 
 test('scrapes a URL once and reports changed selector content', async () => {
   const server = await startServer();
@@ -20,6 +20,10 @@ test('scrapes a URL once and reports changed selector content', async () => {
   const url = `http://127.0.0.1:${address.port}/page`;
   const config: AppConfig = {
     databasePath: join(root, 'test.sqlite'),
+    normalize: { trimWhitespace: true, collapseWhitespace: true, caseInsensitive: false },
+    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1 },
+    concurrency: { global: 1, perHost: 1 },
+    rateLimit: { minDelayMs: 0, maxDelayMs: 0 },
     browser: {
       headless: true,
       userDataDir: join(root, 'user-data'),
@@ -29,6 +33,7 @@ test('scrapes a URL once and reports changed selector content', async () => {
       locale: 'de-DE',
       timezoneId: 'Europe/Berlin',
       extraHTTPHeaders: {},
+      viewport: { width: 1280, height: 900 },
       cookieConsent: {
         enabled: true,
         timeoutMs: 1000,
@@ -40,18 +45,22 @@ test('scrapes a URL once and reports changed selector content', async () => {
     login: { interactive: false, waitTimeoutMs: 1000 },
     urls: [
       {
+        enabled: true,
+        tags: [],
         url,
         selectors: [
           {
             cssPath: '.watched',
             elementIndex: 0,
             compareMode: 'innerText',
+            enabled: true,
             initialLastContent: 'old value'
           },
           {
             cssPath: '.missing',
             elementIndex: 0,
-            compareMode: 'innerText'
+            compareMode: 'innerText',
+            enabled: true
           }
         ],
         loginChecks: [
@@ -59,6 +68,7 @@ test('scrapes a URL once and reports changed selector content', async () => {
             cssPath: '.account',
             elementIndex: 0,
             compareMode: 'innerText',
+            enabled: true,
             expectedContent: 'Signed in'
           }
         ]
@@ -69,7 +79,7 @@ test('scrapes a URL once and reports changed selector content', async () => {
   const db = openDatabase(config.databasePath);
   seedFromConfig(db, config);
 
-  const results = await scrapeAll(db, config, loadEnabledUrls(db));
+  const results = await scrapeAll(db, config, resolveUrls(db, config));
 
   expect(results).toHaveLength(1);
   expect(results[0]?.httpStatus).toBe(200);

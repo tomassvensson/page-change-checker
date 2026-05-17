@@ -1,5 +1,23 @@
 {
   "databasePath": "data/page-change-checker.sqlite",
+  "normalize": {
+    "trimWhitespace": true,
+    "collapseWhitespace": true,
+    "caseInsensitive": false
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "baseDelayMs": 1000,
+    "backoffFactor": 2
+  },
+  "concurrency": {
+    "global": 3,
+    "perHost": 1
+  },
+  "rateLimit": {
+    "minDelayMs": 500,
+    "maxDelayMs": 2000
+  },
   "browser": {
     "headless": true,
     "userDataDir": "data/user-data",
@@ -10,6 +28,10 @@
     "timezoneId": "Europe/Berlin",
     "extraHTTPHeaders": {
       "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 900
     },
     "cookieConsent": {
       "enabled": true,
@@ -34,11 +56,26 @@
   "urls": [
     {
       "url": "https://www.kleinanzeigen.de/pro/salzmann",
+      "enabled": true,
+      "tags": ["listings", "real-estate"],
+      "overrides": {
+        "viewport": { "width": 1440, "height": 1080 }
+      },
       "selectors": [
         {
           "cssPath": "div.my-large div.list-none a.items-center",
           "elementIndex": 0,
-          "compareMode": "innerText"
+          "compareMode": "innerText",
+          "name": "Listing count",
+          "enabled": true,
+          "ignorePatterns": ["\\d+ Anzeigen heute"],
+          "waitForSelector": "div.my-large",
+          "waitForSelectorTimeoutMs": 10000,
+          "normalizeOverride": {
+            "trimWhitespace": true,
+            "collapseWhitespace": true,
+            "caseInsensitive": true
+          }
         }
       ],
       "loginChecks": []

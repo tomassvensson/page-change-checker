@@ -1,4 +1,4 @@
-import { readElementContent } from '../../src/pageReader.js';
+import { readElementContent } from '../../src/browser/pageReader.js';
 
 describe('readElementContent', () => {
   it('returns content for an indexed selector match', async () => {
@@ -8,7 +8,9 @@ describe('readElementContent', () => {
       readElementContent(page, {
         cssPath: '.item',
         elementIndex: 1,
-        compareMode: 'innerText'
+        compareMode: 'innerText',
+        waitForSelector: null,
+        waitForSelectorTimeoutMs: 30000
       })
     ).resolves.toEqual({
       exists: true,
@@ -24,7 +26,9 @@ describe('readElementContent', () => {
       readElementContent(page, {
         cssPath: '.item',
         elementIndex: 2,
-        compareMode: 'innerText'
+        compareMode: 'innerText',
+        waitForSelector: null,
+        waitForSelectorTimeoutMs: 30000
       })
     ).resolves.toEqual({
       exists: false,

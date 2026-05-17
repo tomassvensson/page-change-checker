@@ -1,0 +1,150 @@
+import { readFile } from 'node:fs/promises';
+
+import { z } from 'zod';
+
+import type { AppConfig } from '../core/types.js';
+
+const compareModeSchema = z.enum(['innerHTML', 'innerText']);
+
+const normalizeSchema = z
+  .object({
+    trimWhitespace: z.boolean().default(true),
+    collapseWhitespace: z.boolean().default(true),
+    caseInsensitive: z.boolean().default(false)
+  })
+  .default({});
+
+const viewportSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive()
+});
+
+const selectorSchema = z.object({
+  name: z.string().min(1).optional(),
+  cssPath: z.string().min(1),
+  elementIndex: z.number().int().min(0).default(0),
+  compareMode: compareModeSchema.default('innerText'),
+  enabled: z.boolean().default(true),
+  initialLastContent: z.string().optional(),
+  normalizeOverride: z
+    .object({
+      trimWhitespace: z.boolean().optional(),
+      collapseWhitespace: z.boolean().optional(),
+      caseInsensitive: z.boolean().optional()
+    })
+    .optional(),
+  ignorePatterns: z.array(z.string()).default([]),
+  waitForSelector: z.string().min(1).optional(),
+  waitForSelectorTimeoutMs: z.number().int().positive().optional()
+});
+
+const loginCheckSchema = selectorSchema.extend({
+  expectedContent: z.string().optional(),
+  description: z.string().optional()
+});
+
+const appConfigSchema = z.object({
+  databasePath: z.string().min(1).default('data/page-change-checker.sqlite'),
+  normalize: normalizeSchema,
+  retry: z
+    .object({
+      maxAttempts: z.number().int().min(1).default(3),
+      baseDelayMs: z.number().int().min(0).default(1000),
+      backoffFactor: z.number().min(1).default(2)
+    })
+    .default({}),
+  concurrency: z
+    .object({
+      global: z.number().int().min(1).default(3),
+      perHost: z.number().int().min(1).default(1)
+    })
+    .default({}),
+  rateLimit: z
+    .object({
+      minDelayMs: z.number().int().min(0).default(500),
+      maxDelayMs: z.number().int().min(0).default(2000)
+    })
+    .default({}),
+  browser: z
+    .object({
+      headless: z.boolean().default(true),
+      userDataDir: z.string().min(1).default('data/user-data'),
+      timeoutMs: z.number().int().positive().default(30000),
+      waitUntil: z
+        .enum(['load', 'domcontentloaded', 'networkidle', 'commit'])
+        .default('domcontentloaded'),
+      userAgent: z
+        .string()
+        .min(1)
+        .default(
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+        ),
+      locale: z.string().min(1).default('de-DE'),
+      timezoneId: z.string().min(1).default('Europe/Berlin'),
+      extraHTTPHeaders: z.record(z.string()).default({
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
+      }),
+      viewport: viewportSchema.default({ width: 1280, height: 900 }),
+      cookieConsent: z
+        .object({
+          enabled: z.boolean().default(true),
+          timeoutMs: z.number().int().positive().default(3000),
+          buttonTextRegex: z
+            .string()
+            .min(1)
+            .default(
+              '^(Alle akzeptieren|Akzeptieren|Zustimmen|Einverstanden|Accept all|Accept|I agree|Agree)$'
+            ),
+          cssSelectors: z
+            .array(z.string().min(1))
+            .default([
+              '#onetrust-accept-btn-handler',
+              'button[id*="accept"]',
+              'button[class*="accept"]',
+              '[data-testid*="accept"]',
+              '[aria-label*="accept"]'
+            ])
+        })
+        .default({})
+    })
+    .default({}),
+  schedule: z
+    .object({
+      intervalHours: z.number().positive().default(24)
+    })
+    .default({}),
+  login: z
+    .object({
+      interactive: z.boolean().default(true),
+      waitTimeoutMs: z.number().int().positive().default(600000)
+    })
+    .default({}),
+  urls: z
+    .array(
+      z.object({
+        enabled: z.boolean().default(true),
+        tags: z.array(z.string()).default([]),
+        url: z.string().url(),
+        overrides: z
+          .object({
+            viewport: viewportSchema.optional(),
+            userAgent: z.string().min(1).optional(),
+            locale: z.string().min(1).optional(),
+            timezoneId: z.string().min(1).optional()
+          })
+          .optional(),
+        selectors: z.array(selectorSchema).min(1),
+        loginChecks: z.array(loginCheckSchema).default([])
+      })
+    )
+    .default([])
+});
+
+export async function loadConfig(path = 'config.json'): Promise<AppConfig> {
+  const raw = await readFile(path, 'utf8');
+  return appConfigSchema.parse(JSON.parse(raw));
+}
+
+export function parseConfig(value: unknown): AppConfig {
+  return appConfigSchema.parse(value);
+}

@@ -1,4 +1,4 @@
-import { formatResults } from '../../src/reporter.js';
+import { formatResults } from '../../src/reporting/reporter.js';
 
 describe('formatResults', () => {
   it('prints HTTP status, selector existence, and changed values', () => {

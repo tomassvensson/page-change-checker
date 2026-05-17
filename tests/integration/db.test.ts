@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { AppConfig } from '../../src/core/types.js';
 import {
   loadEnabledUrls,
   openDatabase,
@@ -9,8 +10,7 @@ import {
   updateLoginCheckResult,
   updateTargetContent,
   updateUrlStatus
-} from '../../src/db.js';
-import type { AppConfig } from '../../src/types.js';
+} from '../../src/storage/db.js';
 
 describe('database integration', () => {
   it('seeds configured URLs, selectors, and login checks', () => {
@@ -59,6 +59,10 @@ describe('database integration', () => {
 function makeConfig(): AppConfig {
   return {
     databasePath: 'unused.sqlite',
+    normalize: { trimWhitespace: true, collapseWhitespace: true, caseInsensitive: false },
+    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1 },
+    concurrency: { global: 1, perHost: 1 },
+    rateLimit: { minDelayMs: 0, maxDelayMs: 0 },
     browser: {
       headless: true,
       userDataDir: 'unused-user-data',
@@ -68,6 +72,7 @@ function makeConfig(): AppConfig {
       locale: 'de-DE',
       timezoneId: 'Europe/Berlin',
       extraHTTPHeaders: {},
+      viewport: { width: 1280, height: 900 },
       cookieConsent: {
         enabled: true,
         timeoutMs: 1000,
@@ -79,12 +84,15 @@ function makeConfig(): AppConfig {
     login: { interactive: false, waitTimeoutMs: 1000 },
     urls: [
       {
+        enabled: true,
+        tags: [],
         url: 'https://example.com',
         selectors: [
           {
             cssPath: '.value',
             elementIndex: 0,
             compareMode: 'innerText',
+            enabled: true,
             initialLastContent: 'old'
           }
         ],
@@ -93,6 +101,7 @@ function makeConfig(): AppConfig {
             cssPath: '.account',
             elementIndex: 0,
             compareMode: 'innerText',
+            enabled: true,
             expectedContent: 'Account'
           }
         ]
