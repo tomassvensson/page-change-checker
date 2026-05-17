@@ -122,4 +122,38 @@ describe('formatResults', () => {
     expect(report).toContain('changed: baseline created');
     expect(report).toContain('new: <span>first baseline</span>');
   });
+
+  it('renders dryRun flag, tags, screenshotPath, name alias, and null changed content', () => {
+    const report = formatResults([
+      {
+        url: 'https://example.com/tagged',
+        httpStatus: 200,
+        error: null,
+        loginNeeded: false,
+        dryRun: true,
+        tags: ['shop', 'price'],
+        screenshotPath: '/tmp/screenshot.png',
+        loginChecks: [],
+        targets: [
+          {
+            cssPath: '.value',
+            name: 'Price Label',
+            elementIndex: 0,
+            compareMode: 'innerText',
+            exists: true,
+            matchCount: 1,
+            changed: true,
+            oldContent: null,
+            newContent: null
+          }
+        ]
+      }
+    ]);
+
+    expect(report).toContain('Mode: dry-run');
+    expect(report).toContain('Tags: shop, price');
+    expect(report).toContain('Screenshot: /tmp/screenshot.png');
+    expect(report).toContain('Price Label (.value)');
+    expect(report).toContain('changed: yes');
+  });
 });
