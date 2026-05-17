@@ -8,7 +8,7 @@ export default defineConfig({
     exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**', '.trunk/**'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html'],
+      reporter: ['text', 'html', 'lcov'],
       thresholds: {
         lines: 50,
         functions: 50,
