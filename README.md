@@ -5,7 +5,7 @@
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_page-change-checker&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tomassvensson_page-change-checker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
 
 **You care when a web page changes. This tool tells you when it does.**
 
@@ -99,7 +99,22 @@ The first `npm run scrape` creates the SQLite database and records baseline snap
 
 ## Sample console output
 
-### No change detected
+### First run — establishing the baseline
+
+On the very first `npm run scrape` (or after `npm run seed`) there is no previous snapshot to compare against. The tool records the current content and reports it as the baseline:
+
+```
+URL: https://www.example.com/product/abc
+HTTP status: 200
+Login necessary: no
+Selector: span.price [0] mode=innerText exists=yes matches=1
+  changed: no (first run — baseline recorded)
+  content: €49.99
+```
+
+Every subsequent run compares against this baseline.
+
+### Second run — no change detected
 
 ```
 URL: https://www.example.com/product/abc
@@ -186,6 +201,8 @@ Data flow on each run:
 - [x] Interactive login flow with configurable timeout; session is saved for later runs
 - [x] SQLite snapshot storage — no external service, no cloud dependency
 - [x] Unified diff output when content changes
+- [x] Email, webhook (Slack / Discord / Teams / generic), and Telegram notifications for detected changes
+- [x] Optional screenshot capture when content changes (`screenshot.onChange`)
 - [x] Scheduler with configurable interval (`schedule.intervalHours`)
 - [x] `initialLastContent` baseline — seed a known value without a live scrape
 - [x] Single page load per URL per run, even with multiple watched selectors
@@ -216,6 +233,12 @@ Copy `config.example.json` to `config.json` and edit it. The file is validated o
 | `schedule.intervalHours`       | `number`  | `24`                                | Hours between runs when using `npm run schedule`.                                  |
 | `login.interactive`            | `boolean` | `true`                              | Open a visible browser window when a login wall is detected.                       |
 | `login.waitTimeoutMs`          | `number`  | `600000`                            | Milliseconds to wait for you to complete login before timing out (default 10 min). |
+| `screenshot.onChange`          | `boolean` | `false`                             | Capture a screenshot of the page when content changes.                             |
+| `screenshot.dir`               | `string`  | `"screenshots"`                     | Directory where screenshots are saved (relative to cwd).                           |
+| `notifications.onlyChanges`    | `boolean` | `true`                              | Send notifications only when at least one selector changed.                        |
+| `notifications.email`          | object    | —                                   | SMTP email settings. Set `enabled: true` to activate.                              |
+| `notifications.webhooks`       | array     | `[]`                                | List of webhook endpoints (Slack, Discord, Teams, or generic JSON).                |
+| `notifications.telegram`       | object    | —                                   | Telegram bot settings. Set `enabled: true` to activate.                            |
 | `urls`                         | array     | —                                   | List of pages to monitor. See table below.                                         |
 
 ### `browser` options
@@ -262,6 +285,29 @@ Copy `config.example.json` to `config.json` and edit it. The file is validated o
 | `loginChecks[].compareMode`            | `"innerText"` \| `"innerHTML"` | Compare mode, same as selectors.                                                                                         |
 | `loginChecks[].expectedContent`        | `string`                       | Optional. If provided, the element content must also match this value to count as logged in.                             |
 | `loginChecks[].description`            | `string`                       | Optional. Human-readable label shown in the report next to the login check result.                                       |
+
+### `notifications` options
+
+| Key                                  | Type       | Default | Description                                                           |
+| ------------------------------------ | ---------- | ------- | --------------------------------------------------------------------- |
+| `notifications.onlyChanges`          | `boolean`  | `true`  | Send notifications only when at least one monitored selector changed. |
+| `notifications.email.enabled`        | `boolean`  | `false` | Activate email notifications.                                         |
+| `notifications.email.from`           | `string`   | —       | Sender address.                                                       |
+| `notifications.email.to`             | `string[]` | —       | Recipient addresses.                                                  |
+| `notifications.email.subject`        | `string`   | —       | Email subject line.                                                   |
+| `notifications.email.smtp.host`      | `string`   | —       | SMTP server hostname.                                                 |
+| `notifications.email.smtp.port`      | `number`   | —       | SMTP port (e.g. `587` for STARTTLS, `465` for SSL).                   |
+| `notifications.email.smtp.secure`    | `boolean`  | `false` | Use TLS from the start (set `true` for port 465).                     |
+| `notifications.email.smtp.auth.user` | `string`   | —       | SMTP username.                                                        |
+| `notifications.email.smtp.auth.pass` | `string`   | —       | SMTP password. Keep this out of version control.                      |
+| `notifications.webhooks[].enabled`   | `boolean`  | `false` | Activate this webhook endpoint.                                       |
+| `notifications.webhooks[].url`       | `string`   | —       | Webhook URL (Slack, Discord, Teams, or any HTTP endpoint).            |
+| `notifications.webhooks[].format`    | `string`   | —       | Payload format: `"slack"`, `"discord"`, `"teams"`, or `"generic"`.    |
+| `notifications.webhooks[].headers`   | `object`   | `{}`    | Extra HTTP headers (e.g. `Authorization: Bearer …`).                  |
+| `notifications.telegram.enabled`     | `boolean`  | `false` | Activate Telegram notifications.                                      |
+| `notifications.telegram.botToken`    | `string`   | —       | Telegram Bot API token.                                               |
+| `notifications.telegram.chatId`      | `string`   | —       | Target chat or channel ID (prefix with `-100` for channels).          |
+| `notifications.telegram.onlyChanges` | `boolean`  | `true`  | Override `onlyChanges` for Telegram only.                             |
 
 ---
 
@@ -348,6 +394,11 @@ src/
     db.ts          SQLite helpers (open, migrate, seed, snapshots, resolveUrls)
   reporting/
     reporter.ts    Formats results as a human-readable diff report
+  notifications/
+    index.ts       Orchestrates all notification channels
+    email.ts       SMTP email via nodemailer
+    webhook.ts     HTTP webhooks (Slack, Discord, Teams, generic JSON)
+    telegram.ts    Telegram Bot API
   core/
     types.ts       Shared TypeScript interfaces
     errors.ts      Structured error types (NavigationTimeout, Http, SelectorMissing…)
@@ -424,16 +475,15 @@ Out of scope by design:
 - No web UI or dashboard
 - No multi-user support or authentication layer
 - No distributed worker pool or message queue
-- No email, webhook, or push-notification delivery
 - No cloud deployment (though see [docs/operations.md](docs/operations.md) for systemd / launchd setup)
 
-If you need those features, use this project as a starting point or integrate it with an existing alerting pipeline (e.g. pipe stdout into a notification script).
+Notifications (email, webhooks, Telegram) are included, but they are opt-in and not the primary interface — the tool is designed to be run from the command line and piped into whatever alerting pipeline you already have. If you need a web dashboard or distributed workers, use this project as a starting point.
 
 ---
 
 ## Limitations
 
-- **Console output only** — there is no email, webhook, or push notification. Pipe `npm run scrape` output to a file or use a process manager that captures stdout if you need alerts.
+- **Notifications are best-effort** — email, webhook, and Telegram delivery errors are logged but do not abort the scrape run. For critical alerting, treat the console output as the authoritative record and use notifications as a convenience layer.
 - **Single machine** — there is no distributed queue or worker pool. One Chromium process runs all URLs sequentially.
 - **No scheduling persistence** — if the process restarts, the interval timer resets. Use a real OS scheduler (systemd, launchd, Task Scheduler) for reliability.
 - **CSS selectors can break** — if a site redesigns its DOM, selectors need to be updated manually. There is no automatic selector healing.

@@ -17,6 +17,8 @@ if the schema is invalid.
 | `schedule.intervalHours` | `number`      | `24`                                | Hours between runs when using `npm run schedule`.                  |
 | `login.interactive`      | `boolean`     | `true`                              | Open a visible window when a login wall is detected.               |
 | `login.waitTimeoutMs`    | `number`      | `600000`                            | Milliseconds to wait for manual login (default 10 min).            |
+| `screenshot`             | object        | —                                   | Optional screenshot capture when content changes.                  |
+| `notifications`          | object        | —                                   | Optional notification channels (email, webhooks, Telegram).        |
 | `urls`                   | `UrlConfig[]` | —                                   | Pages to monitor.                                                  |
 
 ---
@@ -158,3 +160,76 @@ Set both to `0` to disable rate limiting (not recommended for production use).
 ```
 
 Fields not specified use the defaults shown in the tables above.
+
+---
+
+## `screenshot`
+
+Capture a screenshot of the page whenever a selector's content changes. Screenshots are saved as PNG files named `<hostname>-<timestamp>.png`.
+
+| Key        | Type      | Default         | Description                                              |
+| ---------- | --------- | --------------- | -------------------------------------------------------- |
+| `onChange` | `boolean` | `false`         | Capture a screenshot when at least one selector changed. |
+| `dir`      | `string`  | `"screenshots"` | Directory for screenshot files (relative to cwd).        |
+
+Omit the `screenshot` key entirely to disable screenshots.
+
+---
+
+## `notifications`
+
+All channels are opt-in. Set `enabled: true` on each channel to activate it.
+
+### Top-level
+
+| Key           | Type      | Default | Description                                                                   |
+| ------------- | --------- | ------- | ----------------------------------------------------------------------------- |
+| `onlyChanges` | `boolean` | `true`  | Send notifications only when at least one monitored selector changed content. |
+| `email`       | object    | —       | SMTP email channel. See below.                                                |
+| `webhooks`    | array     | `[]`    | HTTP webhook endpoints. See below.                                            |
+| `telegram`    | object    | —       | Telegram Bot API channel. See below.                                          |
+
+### `notifications.email`
+
+Uses [nodemailer](https://nodemailer.com) for SMTP delivery.
+
+| Key              | Type       | Description                                                        |
+| ---------------- | ---------- | ------------------------------------------------------------------ |
+| `enabled`        | `boolean`  | Activate email. Default `false`.                                   |
+| `from`           | `string`   | Sender address (e.g. `"alerts@example.com"`).                      |
+| `to`             | `string[]` | Recipient addresses.                                               |
+| `subject`        | `string`   | Email subject line.                                                |
+| `smtp.host`      | `string`   | SMTP server hostname.                                              |
+| `smtp.port`      | `number`   | SMTP port (`587` for STARTTLS, `465` for TLS).                     |
+| `smtp.secure`    | `boolean`  | Start TLS immediately (`true` for port 465, `false` for STARTTLS). |
+| `smtp.auth.user` | `string`   | SMTP username.                                                     |
+| `smtp.auth.pass` | `string`   | SMTP password. **Do not commit this value to version control.**    |
+
+### `notifications.webhooks[]`
+
+Each entry in the array is an independent webhook. Formats:
+
+| `format`    | Target                  | Notes                                         |
+| ----------- | ----------------------- | --------------------------------------------- |
+| `"slack"`   | Slack Incoming Webhook  | Posts a formatted attachment with the diff.   |
+| `"discord"` | Discord Webhook         | Posts an embed with the diff.                 |
+| `"teams"`   | Microsoft Teams Webhook | Posts an Adaptive Card with the diff.         |
+| `"generic"` | Any HTTP endpoint       | Posts a plain JSON object with results array. |
+
+| Key       | Type      | Description                                                       |
+| --------- | --------- | ----------------------------------------------------------------- |
+| `enabled` | `boolean` | Activate this webhook endpoint. Default `false`.                  |
+| `url`     | `string`  | Webhook URL.                                                      |
+| `format`  | `string`  | One of `"slack"`, `"discord"`, `"teams"`, `"generic"`.            |
+| `headers` | `object`  | Additional HTTP headers (e.g. `{ "Authorization": "Bearer …" }`). |
+
+### `notifications.telegram`
+
+Uses the [Telegram Bot API](https://core.telegram.org/bots/api) (`sendMessage`).
+
+| Key           | Type      | Description                                                               |
+| ------------- | --------- | ------------------------------------------------------------------------- |
+| `enabled`     | `boolean` | Activate Telegram. Default `false`.                                       |
+| `botToken`    | `string`  | Bot API token from [@BotFather](https://t.me/BotFather). Keep out of VCS. |
+| `chatId`      | `string`  | Target chat or channel ID. Prefix with `-100` for supergroups/channels.   |
+| `onlyChanges` | `boolean` | Per-channel override for `onlyChanges`. Defaults to the top-level value.  |
