@@ -23,6 +23,11 @@ export default defineConfig({
         'eslint.config.js',
         'vitest.config.ts',
         'src/index.ts',
+        'src/cli/index.ts',
+        'src/cli/scheduler.ts',
+        'src/browser/scraper.ts',
+        'src/core/types.ts',
+        'src/core/errors.ts',
         'src/scheduler.ts',
         'src/scraper.ts',
         'src/types.ts'
