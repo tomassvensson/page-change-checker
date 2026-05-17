@@ -18,10 +18,12 @@ function formatUrlHeader(result: UrlScrapeResult): string[] {
   const tags = result.tags ?? [];
   return [
     `URL: ${result.url}`,
+    ...(result.dryRun ? ['Mode: dry-run (no state saved)'] : []),
     ...(tags.length > 0 ? [`Tags: ${tags.join(', ')}`] : []),
     `HTTP status: ${result.httpStatus ?? 'unavailable'}`,
     `Login necessary: ${result.loginNeeded ? 'yes' : 'no'}`,
-    ...(result.error ? [`Problem: ${result.error}`] : [])
+    ...(result.error ? [`Problem: ${result.error}`] : []),
+    ...(result.screenshotPath ? [`Screenshot: ${result.screenshotPath}`] : [])
   ];
 }
 

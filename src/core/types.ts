@@ -131,6 +131,56 @@ export interface UrlConfig {
   loginChecks?: LoginCheckConfig[];
 }
 
+// ---- Screenshot config (AB) ----
+
+export interface ScreenshotConfig {
+  /** Capture a screenshot of the page when content changes. */
+  onChange: boolean;
+  /** Directory where screenshots are saved. Relative to cwd. */
+  dir: string;
+}
+
+// ---- Notification config (AC-AF) ----
+
+export type WebhookFormat = 'generic' | 'slack' | 'discord' | 'teams';
+
+export interface WebhookConfig {
+  enabled: boolean;
+  url: string;
+  /** Payload format: generic sends raw JSON; slack/discord/teams send formatted messages. */
+  format: WebhookFormat;
+  headers: Record<string, string>;
+}
+
+export interface EmailConfig {
+  enabled: boolean;
+  from: string;
+  to: string[];
+  subject: string;
+  smtp: {
+    host: string;
+    port: number;
+    secure: boolean;
+    auth?: { user: string; pass: string };
+  };
+}
+
+export interface TelegramConfig {
+  enabled: boolean;
+  botToken: string;
+  chatId: string;
+  /** When true (default), only send a message when at least one change was detected. */
+  onlyChanges: boolean;
+}
+
+export interface NotificationsConfig {
+  /** When true (default), only dispatch notifications when at least one change was detected. */
+  onlyChanges: boolean;
+  email?: EmailConfig;
+  webhooks: WebhookConfig[];
+  telegram?: TelegramConfig;
+}
+
 export interface AppConfig {
   databasePath: string;
   browser: BrowserConfig;
@@ -144,6 +194,10 @@ export interface AppConfig {
   concurrency: ConcurrencyConfig;
   /** Rate limiting and jitter between requests to the same host. (Y) */
   rateLimit: RateLimitConfig;
+  /** Screenshot settings; omit or set onChange:false to disable. (AB) */
+  screenshot?: ScreenshotConfig;
+  /** Notification channels dispatched after each scrape run. (AC-AF) */
+  notifications?: NotificationsConfig;
   urls: UrlConfig[];
 }
 
@@ -242,4 +296,8 @@ export interface UrlScrapeResult {
   loginNeeded: boolean;
   loginChecks: LoginCheckResult[];
   targets: TargetResult[];
+  /** Absolute path to the screenshot taken when a change was detected. (AB) */
+  screenshotPath?: string;
+  /** True when the result was produced in --dry-run mode (no state was saved). */
+  dryRun?: boolean;
 }

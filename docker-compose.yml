@@ -1,0 +1,25 @@
+services:
+  page-change-checker:
+    build: .
+    restart: unless-stopped
+    volumes:
+      # Persistent SQLite database + Playwright browser profile
+      - ./data:/app/data
+      # Config file (read-only inside the container)
+      - ./config.json:/app/config.json:ro
+      # Screenshots saved by the container are accessible on the host
+      - ./screenshots:/app/screenshots
+    environment:
+      # Override SMTP credentials without modifying config.json
+      # PCC_SMTP_USER and PCC_SMTP_PASS are read from the host environment
+      # or from a .env file next to docker-compose.yml.
+      #
+      # To use them in config.json, reference shell variable expansion is not
+      # supported by the app directly — set the values in config.json or use
+      # an environment-aware secrets manager.
+      TZ: Europe/Berlin
+    # Example: pass SMTP secrets from host env to the container
+    # env_file:
+    #   - .env
+
+volumes: {}
