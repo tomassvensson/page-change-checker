@@ -76,13 +76,23 @@ async function jitteredDelay(config: RateLimitConfig): Promise<void> {
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface ScrapeOptions {
+  /** When true, skip all database writes (--dry-run mode). */
+  dryRun?: boolean;
+}
+
 export async function scrapeAll(
   db: SqliteDatabase,
   config: AppConfig,
-  urls: LoadedUrl[]
+  urls: LoadedUrl[],
+  options: ScrapeOptions = {}
 ): Promise<UrlScrapeResult[]> {
   await mkdir(resolve(config.browser.userDataDir), { recursive: true });
   await mkdir(dirname(resolve(config.databasePath)), { recursive: true });
+
+  if (config.screenshot?.onChange) {
+    await mkdir(resolve(config.screenshot.dir), { recursive: true });
+  }
 
   const context = await chromium.launchPersistentContext(resolve(config.browser.userDataDir), {
     headless: config.browser.headless,
@@ -99,7 +109,7 @@ export async function scrapeAll(
   try {
     const hostResults = await Promise.all(
       [...groupedByHost.values()].map((hostUrls) =>
-        scrapeHostGroup(db, context, config, hostUrls, globalSem)
+        scrapeHostGroup(db, context, config, hostUrls, globalSem, options)
       )
     );
     return hostResults.flat();
@@ -117,7 +127,8 @@ async function scrapeHostGroup(
   context: BrowserContext,
   config: AppConfig,
   hostUrls: LoadedUrl[],
-  globalSem: Semaphore
+  globalSem: Semaphore,
+  options: ScrapeOptions
 ): Promise<UrlScrapeResult[]> {
   const results: UrlScrapeResult[] = [];
 
@@ -129,13 +140,19 @@ async function scrapeHostGroup(
     await globalSem.acquire();
     try {
       const loadedUrl = hostUrls[i];
-      const result = await scrapeWithRetry(db, context, config, loadedUrl);
+      const result = await scrapeWithRetry(db, context, config, loadedUrl, options);
       results.push(result);
 
       // Interactive login flow: retry the same URL after login completes.
       if (result.loginNeeded && config.login.interactive) {
         await waitForInteractiveLogin(context, config, loadedUrl);
-        results[results.length - 1] = await scrapeWithRetry(db, context, config, loadedUrl);
+        results[results.length - 1] = await scrapeWithRetry(
+          db,
+          context,
+          config,
+          loadedUrl,
+          options
+        );
       }
     } finally {
       globalSem.release();
@@ -153,7 +170,8 @@ async function scrapeWithRetry(
   db: SqliteDatabase,
   context: BrowserContext,
   config: AppConfig,
-  loadedUrl: LoadedUrl
+  loadedUrl: LoadedUrl,
+  options: ScrapeOptions
 ): Promise<UrlScrapeResult> {
   const retry: RetryConfig = config.retry;
   let lastError: unknown;
@@ -161,7 +179,7 @@ async function scrapeWithRetry(
 
   for (let attempt = 1; attempt <= retry.maxAttempts; attempt++) {
     try {
-      return await scrapeOne(db, context, config, loadedUrl);
+      return await scrapeOne(db, context, config, loadedUrl, options);
     } catch (error) {
       lastError = error;
       const errorType = classifyError(error);
@@ -173,7 +191,9 @@ async function scrapeWithRetry(
     }
   }
 
-  updateUrlStatus(db, loadedUrl.url.id, lastHttpStatus);
+  if (!options.dryRun) {
+    updateUrlStatus(db, loadedUrl.url.id, lastHttpStatus);
+  }
   const errorType = classifyError(lastError);
   return {
     url: loadedUrl.url.url,
@@ -183,7 +203,8 @@ async function scrapeWithRetry(
     errorType,
     loginNeeded: loadedUrl.loginChecks.length > 0,
     loginChecks: [],
-    targets: []
+    targets: [],
+    dryRun: options.dryRun ?? false
   };
 }
 
@@ -191,7 +212,8 @@ async function scrapeOne(
   db: SqliteDatabase,
   context: BrowserContext,
   config: AppConfig,
-  loadedUrl: LoadedUrl
+  loadedUrl: LoadedUrl,
+  options: ScrapeOptions
 ): Promise<UrlScrapeResult> {
   const page = await context.newPage();
   let httpStatus: number | null = null;
@@ -208,11 +230,23 @@ async function scrapeOne(
     });
     httpStatus = response?.status() ?? null;
     await dismissCookieConsent(page, config);
-    updateUrlStatus(db, loadedUrl.url.id, httpStatus);
+    if (!options.dryRun) {
+      updateUrlStatus(db, loadedUrl.url.id, httpStatus);
+    }
 
-    const loginChecks = await evaluateLoginChecks(db, page, loadedUrl.loginChecks);
+    const loginChecks = await evaluateLoginChecks(db, page, loadedUrl.loginChecks, options);
     const loginNeeded = loginChecks.some((check) => !check.matched);
-    const targets = await evaluateTargets(db, page, loadedUrl.targets);
+    const targets = await evaluateTargets(db, page, loadedUrl.targets, options);
+
+    // AB: take a screenshot if any target changed
+    let screenshotPath: string | undefined;
+    if (!options.dryRun && config.screenshot?.onChange && targets.some((t) => t.changed === true)) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const slug = new URL(loadedUrl.url.url).hostname.replace(/[^a-z0-9]/gi, '-');
+      const filename = `${slug}-${loadedUrl.url.id}-${timestamp}.png`;
+      screenshotPath = resolve(config.screenshot.dir, filename);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+    }
 
     return {
       url: loadedUrl.url.url,
@@ -221,10 +255,14 @@ async function scrapeOne(
       error: null,
       loginNeeded,
       loginChecks,
-      targets
+      targets,
+      screenshotPath,
+      dryRun: options.dryRun ?? false
     };
   } catch (error) {
-    updateUrlStatus(db, loadedUrl.url.id, httpStatus);
+    if (!options.dryRun) {
+      updateUrlStatus(db, loadedUrl.url.id, httpStatus);
+    }
     throw error;
   } finally {
     await page.close();
@@ -234,7 +272,8 @@ async function scrapeOne(
 async function evaluateTargets(
   db: SqliteDatabase,
   page: Page,
-  targets: ResolvedTarget[]
+  targets: ResolvedTarget[],
+  options: ScrapeOptions
 ): Promise<TargetResult[]> {
   const results: TargetResult[] = [];
 
@@ -252,7 +291,7 @@ async function evaluateTargets(
         ? processedNew !== target.lastContent
         : null;
 
-    if (processedNew !== null) {
+    if (!options.dryRun && processedNew !== null) {
       updateTargetContent(db, target.id, processedNew);
     }
 
@@ -275,7 +314,8 @@ async function evaluateTargets(
 async function evaluateLoginChecks(
   db: SqliteDatabase,
   page: Page,
-  checks: LoginCheckRecord[]
+  checks: LoginCheckRecord[],
+  options: ScrapeOptions
 ): Promise<LoginCheckResult[]> {
   const results: LoginCheckResult[] = [];
 
@@ -290,7 +330,9 @@ async function evaluateLoginChecks(
     const matched =
       read.exists &&
       (check.expectedContent === null || read.content?.includes(check.expectedContent) === true);
-    updateLoginCheckResult(db, check.id, read.content, matched);
+    if (!options.dryRun) {
+      updateLoginCheckResult(db, check.id, read.content, matched);
+    }
 
     results.push({
       cssPath: check.cssPath,

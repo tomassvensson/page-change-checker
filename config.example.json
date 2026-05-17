@@ -53,6 +53,62 @@
     "interactive": true,
     "waitTimeoutMs": 600000
   },
+  "screenshot": {
+    "onChange": true,
+    "dir": "screenshots"
+  },
+  "notifications": {
+    "onlyChanges": true,
+    "email": {
+      "enabled": false,
+      "from": "alerts@example.com",
+      "to": ["you@example.com"],
+      "subject": "[page-change-checker] Change detected",
+      "smtp": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "secure": false,
+        "auth": {
+          "user": "alerts@example.com",
+          "pass": "changeme"
+        }
+      }
+    },
+    "webhooks": [
+      {
+        "enabled": false,
+        "url": "https://hooks.slack.com/services/T000/B000/xxxx",
+        "format": "slack",
+        "headers": {}
+      },
+      {
+        "enabled": false,
+        "url": "https://discord.com/api/webhooks/1234/xxxx",
+        "format": "discord",
+        "headers": {}
+      },
+      {
+        "enabled": false,
+        "url": "https://outlook.office.com/webhook/xxxx/IncomingWebhook/yyyy/zzzz",
+        "format": "teams",
+        "headers": {}
+      },
+      {
+        "enabled": false,
+        "url": "https://your-server.example.com/hook",
+        "format": "generic",
+        "headers": {
+          "Authorization": "Bearer your-token"
+        }
+      }
+    ],
+    "telegram": {
+      "enabled": false,
+      "botToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+      "chatId": "-1001234567890",
+      "onlyChanges": true
+    }
+  },
   "urls": [
     {
       "url": "https://www.kleinanzeigen.de/pro/salzmann",

@@ -137,7 +137,55 @@ const appConfigSchema = z.object({
         loginChecks: z.array(loginCheckSchema).default([])
       })
     )
-    .default([])
+    .default([]),
+  screenshot: z
+    .object({
+      onChange: z.boolean().default(true),
+      dir: z.string().min(1).default('screenshots')
+    })
+    .optional(),
+  notifications: z
+    .object({
+      onlyChanges: z.boolean().default(true),
+      email: z
+        .object({
+          enabled: z.boolean().default(false),
+          from: z.string().email(),
+          to: z.array(z.string().email()).min(1),
+          subject: z.string().default('[page-change-checker] Change detected'),
+          smtp: z.object({
+            host: z.string().min(1),
+            port: z.number().int().positive().default(587),
+            secure: z.boolean().default(false),
+            auth: z
+              .object({
+                user: z.string().min(1),
+                pass: z.string().min(1)
+              })
+              .optional()
+          })
+        })
+        .optional(),
+      webhooks: z
+        .array(
+          z.object({
+            enabled: z.boolean().default(true),
+            url: z.string().url(),
+            format: z.enum(['generic', 'slack', 'discord', 'teams']).default('generic'),
+            headers: z.record(z.string()).default({})
+          })
+        )
+        .default([]),
+      telegram: z
+        .object({
+          enabled: z.boolean().default(false),
+          botToken: z.string().min(1),
+          chatId: z.string().min(1),
+          onlyChanges: z.boolean().default(true)
+        })
+        .optional()
+    })
+    .optional()
 });
 
 export async function loadConfig(path = 'config.json'): Promise<AppConfig> {
