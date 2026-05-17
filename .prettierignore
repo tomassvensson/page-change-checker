@@ -3,7 +3,6 @@ dist/
 coverage/
 playwright-report/
 test-results/
-config.json
-data/*.sqlite
-data/user-data/
-.env
+data/
+.trunk/
+a.html
