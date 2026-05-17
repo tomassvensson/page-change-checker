@@ -55,3 +55,56 @@ Husky hooks are included:
 
 - pre-commit: lint, format check, build, and unit/integration tests
 - pre-push: full verification including coverage and E2E tests
+
+The hooks are installed by `npm install` through the `prepare` script. They can also be installed explicitly with:
+
+```bash
+npm run prepare
+```
+
+## GitHub
+
+This repository is configured for:
+
+```bash
+git remote add origin https://github.com/tomassvensson/page-change-checker
+```
+
+Publish the current `main` branch with:
+
+```bash
+git push -u origin main
+```
+
+CI runs on pushes to `main` and on pull requests using GitHub Actions. The workflow installs dependencies, installs Playwright Chromium, and runs:
+
+```bash
+npm run verify
+```
+
+## Dependency Licenses
+
+Direct dependency license summary from installed package metadata:
+
+| Package                | Scope           | Version   | License      | Project                                                                             |
+| ---------------------- | --------------- | --------- | ------------ | ----------------------------------------------------------------------------------- |
+| better-sqlite3         | dependencies    | ^11.8.1   | MIT          | http://github.com/WiseLibs/better-sqlite3                                           |
+| commander              | dependencies    | ^13.1.0   | MIT          | git+https://github.com/tj/commander.js.git                                          |
+| cron-parser            | dependencies    | ^4.9.0    | MIT          | https://github.com/harrisiirak/cron-parser.git                                      |
+| diff                   | dependencies    | ^7.0.0    | BSD-3-Clause | git://github.com/kpdecker/jsdiff.git                                                |
+| playwright             | dependencies    | ^1.51.1   | Apache-2.0   | https://playwright.dev                                                              |
+| zod                    | dependencies    | ^3.24.2   | MIT          | https://zod.dev                                                                     |
+| @eslint/js             | devDependencies | ^9.22.0   | MIT          | https://eslint.org                                                                  |
+| @playwright/test       | devDependencies | ^1.51.1   | Apache-2.0   | https://playwright.dev                                                              |
+| @types/better-sqlite3  | devDependencies | ^7.6.13   | MIT          | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/better-sqlite3 |
+| @types/diff            | devDependencies | ^7.0.0    | MIT          | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/diff           |
+| @types/node            | devDependencies | ^22.13.11 | MIT          | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node           |
+| @vitest/coverage-v8    | devDependencies | ^3.0.9    | MIT          | https://github.com/vitest-dev/vitest/tree/main/packages/coverage-v8#readme          |
+| eslint                 | devDependencies | ^9.22.0   | MIT          | https://eslint.org                                                                  |
+| eslint-plugin-import-x | devDependencies | ^4.8.0    | MIT          | https://github.com/un-ts/eslint-plugin-import-x#readme                              |
+| husky                  | devDependencies | ^9.1.7    | MIT          | git+https://github.com/typicode/husky.git                                           |
+| prettier               | devDependencies | ^3.5.3    | MIT          | https://prettier.io                                                                 |
+| tsx                    | devDependencies | ^4.19.3   | MIT          | https://tsx.hirok.io                                                                |
+| typescript             | devDependencies | ^5.8.2    | Apache-2.0   | https://www.typescriptlang.org/                                                     |
+| typescript-eslint      | devDependencies | ^8.26.1   | MIT          | https://typescript-eslint.io/packages/typescript-eslint                             |
+| vitest                 | devDependencies | ^3.0.9    | MIT          | https://github.com/vitest-dev/vitest#readme                                         |
