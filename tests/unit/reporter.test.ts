@@ -81,4 +81,45 @@ describe('formatResults', () => {
     expect(report).toContain('changed: no');
     expect(report).toContain('selector did not match');
   });
+
+  it('prints unavailable status, actual login content, and created baselines', () => {
+    const report = formatResults([
+      {
+        url: 'https://example.com/new',
+        httpStatus: null,
+        error: null,
+        loginNeeded: false,
+        loginChecks: [
+          {
+            cssPath: '.account',
+            elementIndex: 0,
+            compareMode: 'innerText',
+            exists: true,
+            matched: true,
+            expectedContent: null,
+            actualContent: 'Signed in',
+            description: null
+          }
+        ],
+        targets: [
+          {
+            cssPath: '.new-value',
+            elementIndex: 0,
+            compareMode: 'innerHTML',
+            exists: true,
+            matchCount: 1,
+            changed: null,
+            oldContent: null,
+            newContent: '<span>first baseline</span>'
+          }
+        ]
+      }
+    ]);
+
+    expect(report).toContain('HTTP status: unavailable');
+    expect(report).toContain('matched=yes');
+    expect(report).toContain('actual: Signed in');
+    expect(report).toContain('changed: baseline created');
+    expect(report).toContain('new: <span>first baseline</span>');
+  });
 });
