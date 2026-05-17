@@ -27,7 +27,39 @@ const appConfigSchema = z.object({
       timeoutMs: z.number().int().positive().default(30000),
       waitUntil: z
         .enum(['load', 'domcontentloaded', 'networkidle', 'commit'])
-        .default('domcontentloaded')
+        .default('domcontentloaded'),
+      userAgent: z
+        .string()
+        .min(1)
+        .default(
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+        ),
+      locale: z.string().min(1).default('de-DE'),
+      timezoneId: z.string().min(1).default('Europe/Berlin'),
+      extraHTTPHeaders: z.record(z.string()).default({
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
+      }),
+      cookieConsent: z
+        .object({
+          enabled: z.boolean().default(true),
+          timeoutMs: z.number().int().positive().default(3000),
+          buttonTextRegex: z
+            .string()
+            .min(1)
+            .default(
+              '^(Alle akzeptieren|Akzeptieren|Zustimmen|Einverstanden|Accept all|Accept|I agree|Agree)$'
+            ),
+          cssSelectors: z
+            .array(z.string().min(1))
+            .default([
+              '#onetrust-accept-btn-handler',
+              'button[id*="accept"]',
+              'button[class*="accept"]',
+              '[data-testid*="accept"]',
+              '[aria-label*="accept"]'
+            ])
+        })
+        .default({})
     })
     .default({}),
   schedule: z

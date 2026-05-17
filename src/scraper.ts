@@ -29,7 +29,11 @@ export async function scrapeAll(
 
   const context = await chromium.launchPersistentContext(resolve(config.browser.userDataDir), {
     headless: config.browser.headless,
-    viewport: { width: 1280, height: 900 }
+    viewport: { width: 1280, height: 900 },
+    userAgent: config.browser.userAgent,
+    locale: config.browser.locale,
+    timezoneId: config.browser.timezoneId,
+    extraHTTPHeaders: config.browser.extraHTTPHeaders
   });
 
   try {
@@ -69,6 +73,7 @@ async function scrapeOne(
       waitUntil: config.browser.waitUntil,
       timeout: config.browser.timeoutMs
     });
+    await dismissCookieQuestions(page, config);
     httpStatus = response?.status() ?? null;
     updateUrlStatus(db, loadedUrl.url.id, httpStatus);
 
@@ -173,6 +178,7 @@ async function waitForInteractiveLogin(
     waitUntil: config.browser.waitUntil,
     timeout: config.browser.timeoutMs
   });
+  await dismissCookieQuestions(page, config);
 
   const deadline = Date.now() + config.login.waitTimeoutMs;
   while (Date.now() < deadline) {
@@ -193,6 +199,40 @@ async function waitForInteractiveLogin(
   }
 
   await page.close();
+}
+
+async function dismissCookieQuestions(page: Page, config: AppConfig): Promise<void> {
+  if (!config.browser.cookieConsent.enabled) {
+    return;
+  }
+
+  for (const cssSelector of config.browser.cookieConsent.cssSelectors) {
+    const locator = page.locator(cssSelector).first();
+    try {
+      if ((await locator.count()) > 0 && (await locator.isVisible({ timeout: 500 }))) {
+        await locator.click({ timeout: config.browser.cookieConsent.timeoutMs });
+        return;
+      }
+    } catch {
+      // Consent banners vary widely. Try the next configured strategy.
+    }
+  }
+
+  let buttonName: RegExp;
+  try {
+    buttonName = new RegExp(config.browser.cookieConsent.buttonTextRegex, 'iu');
+  } catch {
+    return;
+  }
+
+  const button = page.getByRole('button', { name: buttonName }).first();
+  try {
+    if ((await button.count()) > 0 && (await button.isVisible({ timeout: 500 }))) {
+      await button.click({ timeout: config.browser.cookieConsent.timeoutMs });
+    }
+  } catch {
+    // A failed cookie click should not make the scrape fail.
+  }
 }
 
 function groupByHost(urls: LoadedUrl[]): Map<string, LoadedUrl[]> {

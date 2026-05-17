@@ -5,6 +5,18 @@ export interface BrowserConfig {
   userDataDir: string;
   timeoutMs: number;
   waitUntil: 'load' | 'domcontentloaded' | 'networkidle' | 'commit';
+  userAgent: string;
+  locale: string;
+  timezoneId: string;
+  extraHTTPHeaders: Record<string, string>;
+  cookieConsent: CookieConsentConfig;
+}
+
+export interface CookieConsentConfig {
+  enabled: boolean;
+  timeoutMs: number;
+  buttonTextRegex: string;
+  cssSelectors: string[];
 }
 
 export interface LoginConfig {

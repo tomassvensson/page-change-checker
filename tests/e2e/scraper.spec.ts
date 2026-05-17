@@ -24,7 +24,17 @@ test('scrapes a URL once and reports changed selector content', async () => {
       headless: true,
       userDataDir: join(root, 'user-data'),
       timeoutMs: 5000,
-      waitUntil: 'domcontentloaded'
+      waitUntil: 'domcontentloaded',
+      userAgent: 'test-agent',
+      locale: 'de-DE',
+      timezoneId: 'Europe/Berlin',
+      extraHTTPHeaders: {},
+      cookieConsent: {
+        enabled: true,
+        timeoutMs: 1000,
+        buttonTextRegex: '^Accept$',
+        cssSelectors: []
+      }
     },
     schedule: { intervalHours: 24 },
     login: { interactive: false, waitTimeoutMs: 1000 },
@@ -84,7 +94,7 @@ function startServer(): Promise<Server> {
     if (request.url === '/page') {
       response.writeHead(200, { 'content-type': 'text/html' });
       response.end(
-        '<main><div class="account">Signed in</div><div class="watched">new value</div></main>'
+        '<main><div class="account">Signed in</div><button onclick="document.querySelector(\'.watched\').textContent = \'new value\'">Accept</button><div class="watched">blocked value</div></main>'
       );
       return;
     }
