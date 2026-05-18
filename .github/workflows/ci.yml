@@ -40,3 +40,29 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  yaml-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate YAML files
+        run: |
+          find . \
+            -name '*.yml' -o -name '*.yaml' \
+            | grep -v node_modules \
+            | grep -v coverage \
+            | xargs -I{} sh -c 'python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" {} && echo "OK: {}" || exit 1'
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+
+      - name: Build Docker image
+        run: docker build --tag page-change-checker:ci .

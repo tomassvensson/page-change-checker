@@ -1,6 +1,7 @@
 # Page Change Checker
 
 [![CI](https://github.com/tomassvensson/page-change-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/tomassvensson/page-change-checker/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/tomassvensson/page-change-checker/actions/workflows/codeql.yml/badge.svg)](https://github.com/tomassvensson/page-change-checker/actions/workflows/codeql.yml)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_page-change-checker&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tomassvensson_page-change-checker)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_page-change-checker&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tomassvensson_page-change-checker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -10,20 +11,6 @@
 **You care when a web page changes. This tool tells you when it does.**
 
 Point it at any URL and a CSS selector. On every run it loads the page in a real Chromium browser, extracts the element text, compares it to the last saved snapshot in SQLite, and prints a diff if anything changed. No cloud account required—everything runs locally.
-
----
-
-## Legal notice
-
-This tool uses a real browser to load web pages you configure. Before pointing it at any URL:
-
-- **Check the site's `robots.txt`** — respect `Disallow` rules that apply to automated agents.
-- **Read the Terms of Service** — many sites prohibit automated scraping or monitoring. Using this tool in violation of a site's ToS is your responsibility.
-- **Apply rate limiting** — use `rateLimit.minDelayMs` / `maxDelayMs` and `concurrency.perHost` to avoid hammering servers. The defaults are intentionally conservative.
-- **Do not scrape personal data** — extracting information about individuals without their consent may violate GDPR, CCPA, or equivalent regulations in your jurisdiction.
-- **Only monitor pages you are authorised to access** — do not use this tool to access systems without permission.
-
-The authors of this project accept no liability for how it is used.
 
 ---
 
@@ -163,6 +150,19 @@ Login check: div.user-avatar [0] exists=no matched=no
 Selector: h2.plan-name [0] mode=innerText exists=no matches=0
   problem: selector did not match the requested element
 ```
+
+---
+
+## Sample screenshot (screenshot-on-change)
+
+When `screenshot.onChange` is enabled, a full-page PNG is captured every time content changes. The filename encodes the hostname, database row ID, and ISO timestamp so screenshots are sortable and traceable:
+
+```
+screenshots/
+  www-example-com-3-2025-01-15T10-30-00-000Z.png
+```
+
+> A sample image will appear here once the project runs against a live page with `screenshot.onChange: true`.
 
 ---
 
@@ -490,6 +490,20 @@ Notifications (email, webhooks, Telegram) are included, but they are opt-in and 
 - **Login automation is manual** — the interactive login flow requires a human to log in once. Automated form-filling is not supported by design (avoids credentials in config files).
 - **No rendering timeout per selector** — if a page never finishes loading, the navigation timeout (`browser.timeoutMs`) applies but there is no per-selector wait strategy beyond what Playwright's `waitUntil` provides.
 - **SQLite only** — the snapshot store is a local SQLite file. There is no support for Postgres, MySQL, or any remote store.
+
+---
+
+## Legal notice
+
+This tool uses a real browser to load web pages you configure. Before pointing it at any URL:
+
+- **Check the site's `robots.txt`** — respect `Disallow` rules that apply to automated agents.
+- **Read the Terms of Service** — many sites prohibit automated scraping or monitoring. Using this tool in violation of a site's ToS is your responsibility.
+- **Apply rate limiting** — use `rateLimit.minDelayMs` / `maxDelayMs` and `concurrency.perHost` to avoid hammering servers. The defaults are intentionally conservative.
+- **Do not scrape personal data** — extracting information about individuals without their consent may violate GDPR, CCPA, or equivalent regulations in your jurisdiction.
+- **Only monitor pages you are authorised to access** — do not use this tool to access systems without permission.
+
+The authors of this project accept no liability for how it is used.
 
 ---
 

@@ -112,6 +112,14 @@ export interface SelectorConfig {
   waitForSelector?: string;
   /** Timeout for waitForSelector in ms. Defaults to browser.timeoutMs. */
   waitForSelectorTimeoutMs?: number;
+  /**
+   * After extracting element content, apply this regex and use the first capture group
+   * as the value for comparison. Useful for pulling a number, price, or date out of
+   * surrounding boilerplate without needing ignorePatterns. (AA)
+   *
+   * Example: `"(\\d[\\d.,]*)\\s*€"` extracts the numeric amount from "Price: 49,99 €".
+   */
+  extractRegex?: string;
 }
 
 export interface LoginCheckConfig extends SelectorConfig {
@@ -131,13 +139,30 @@ export interface UrlConfig {
   loginChecks?: LoginCheckConfig[];
 }
 
-// ---- Screenshot config (AB) ----
+// ---- Screenshot config (AB, AC) ----
+
+export type ScreenshotMode = 'page' | 'element';
 
 export interface ScreenshotConfig {
-  /** Capture a screenshot of the page when content changes. */
+  /** Capture a screenshot when content changes. */
   onChange: boolean;
   /** Directory where screenshots are saved. Relative to cwd. */
   dir: string;
+  /**
+   * `'page'` (default) — full-page screenshot.
+   * `'element'` — screenshot clipped to the bounding box of the first changed element. (AB)
+   */
+  mode?: ScreenshotMode;
+  /**
+   * Automatically delete screenshots older than this many days.
+   * Omit to keep all screenshots. (AC)
+   */
+  maxAgeDays?: number;
+  /**
+   * Keep only the N most-recent screenshots per URL slug.
+   * Omit for no count limit. (AC)
+   */
+  maxCount?: number;
 }
 
 // ---- Notification config (AC-AF) ----
@@ -244,6 +269,8 @@ export interface ResolvedTarget extends WatchTargetRecord {
   waitForSelector: string | null;
   /** Timeout for waitForSelector in ms. */
   waitForSelectorTimeoutMs: number;
+  /** Regex applied after extraction; first capture group becomes the content. (AA) */
+  extractRegex: string | null;
 }
 
 export interface LoadedUrl {

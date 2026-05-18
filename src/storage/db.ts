@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import Database from 'better-sqlite3';
@@ -18,53 +18,108 @@ import type {
 
 export type SqliteDatabase = Database.Database;
 
+// ---------------------------------------------------------------------------
+// Schema migrations — each entry is applied exactly once, tracked by version.
+// ---------------------------------------------------------------------------
+
+interface Migration {
+  version: number;
+  sql: string;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    sql: `
+      CREATE TABLE IF NOT EXISTS urls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT NOT NULL UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_http_status INTEGER,
+        last_checked_at TEXT,
+        tags TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS watch_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url_id INTEGER NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
+        name TEXT,
+        css_path TEXT NOT NULL,
+        element_index INTEGER NOT NULL DEFAULT 0,
+        compare_mode TEXT NOT NULL CHECK(compare_mode IN ('innerHTML', 'innerText')),
+        last_content TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(url_id, css_path, element_index, compare_mode)
+      );
+
+      CREATE TABLE IF NOT EXISTS login_checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url_id INTEGER NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
+        css_path TEXT NOT NULL,
+        element_index INTEGER NOT NULL DEFAULT 0,
+        compare_mode TEXT NOT NULL CHECK(compare_mode IN ('innerHTML', 'innerText')),
+        expected_content TEXT,
+        description TEXT,
+        last_seen_content TEXT,
+        last_matched INTEGER,
+        UNIQUE(url_id, css_path, element_index, compare_mode)
+      );
+    `
+  }
+];
+
+/**
+ * Back up the database file to `<path>.backup.<timestamp>` before the first
+ * pending migration is applied, so a failed migration is always recoverable.
+ */
+export function backupDatabase(path: string): string {
+  if (!existsSync(path)) return path; // nothing to back up on first run
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const dest = `${path}.backup.${ts}`;
+  copyFileSync(path, dest);
+  return dest;
+}
+
 export function openDatabase(path: string): SqliteDatabase {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  migrate(db);
+  migrate(db, path);
   return db;
 }
 
-export function migrate(db: SqliteDatabase): void {
+export function migrate(db: SqliteDatabase, dbPath?: string): void {
+  // Create the migrations tracking table if it doesn't exist yet.
   db.exec(`
-    CREATE TABLE IF NOT EXISTS urls (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      url TEXT NOT NULL UNIQUE,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      last_http_status INTEGER,
-      last_checked_at TEXT,
-      tags TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS watch_targets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      url_id INTEGER NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
-      name TEXT,
-      css_path TEXT NOT NULL,
-      element_index INTEGER NOT NULL DEFAULT 0,
-      compare_mode TEXT NOT NULL CHECK(compare_mode IN ('innerHTML', 'innerText')),
-      last_content TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      UNIQUE(url_id, css_path, element_index, compare_mode)
-    );
-
-    CREATE TABLE IF NOT EXISTS login_checks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      url_id INTEGER NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
-      css_path TEXT NOT NULL,
-      element_index INTEGER NOT NULL DEFAULT 0,
-      compare_mode TEXT NOT NULL CHECK(compare_mode IN ('innerHTML', 'innerText')),
-      expected_content TEXT,
-      description TEXT,
-      last_seen_content TEXT,
-      last_matched INTEGER,
-      UNIQUE(url_id, css_path, element_index, compare_mode)
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version  INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
 
-  // Additive migrations for databases created before these columns existed.
+  const applied = new Set(
+    (db.prepare('SELECT version FROM schema_migrations').all() as Array<{ version: number }>).map(
+      (r) => r.version
+    )
+  );
+
+  const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
+  if (pending.length === 0) return;
+
+  // Back up the database before applying any new migration.
+  if (dbPath) {
+    backupDatabase(dbPath);
+  }
+
+  for (const migration of pending) {
+    db.transaction(() => {
+      db.exec(migration.sql);
+      db.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(migration.version);
+    })();
+  }
+
+  // Additive column migrations for databases that pre-date the migration table.
   addColumnIfMissing(db, 'urls', 'tags', 'TEXT');
   addColumnIfMissing(db, 'watch_targets', 'name', 'TEXT');
   addColumnIfMissing(db, 'watch_targets', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
@@ -210,7 +265,8 @@ export function loadEnabledUrls(db: SqliteDatabase): LoadedUrl[] {
       normalizeConfig: DEFAULT_NORMALIZE,
       ignorePatterns: [],
       waitForSelector: null,
-      waitForSelectorTimeoutMs: 30000
+      waitForSelectorTimeoutMs: 30000,
+      extractRegex: null
     })),
     loginChecks: loginStmt.all(url.id) as LoginCheckRecord[]
   }));
@@ -250,7 +306,8 @@ export function resolveUrls(db: SqliteDatabase, config: AppConfig): LoadedUrl[] 
           normalizeConfig,
           ignorePatterns: selCfg?.ignorePatterns ?? [],
           waitForSelector: selCfg?.waitForSelector ?? null,
-          waitForSelectorTimeoutMs: selCfg?.waitForSelectorTimeoutMs ?? config.browser.timeoutMs
+          waitForSelectorTimeoutMs: selCfg?.waitForSelectorTimeoutMs ?? config.browser.timeoutMs,
+          extractRegex: selCfg?.extractRegex ?? null
         };
       });
 

@@ -1,9 +1,10 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AppConfig } from '../../src/core/types.js';
 import {
+  backupDatabase,
   loadEnabledUrls,
   migrate,
   openDatabase,
@@ -122,6 +123,68 @@ describe('database integration', () => {
     db.close();
   });
 
+  // ---- U: migration version table tests ----
+
+  it('migrate creates schema_migrations table', () => {
+    const db = tempDb();
+    const exists = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+      .get();
+    expect(exists).toBeTruthy();
+    db.close();
+  });
+
+  it('migrate records applied version in schema_migrations', () => {
+    const db = tempDb();
+    const rows = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {
+      version: number;
+    }[];
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows[0]?.version).toBe(1);
+    db.close();
+  });
+
+  it('migrate running twice only inserts version once', () => {
+    const db = tempDb();
+    // openDatabase already called migrate once; call again explicitly.
+    migrate(db);
+    const rows = db.prepare('SELECT version FROM schema_migrations').all();
+    // There must be no duplicate version 1 entry.
+    const version1Count = (rows as { version: number }[]).filter((r) => r.version === 1).length;
+    expect(version1Count).toBe(1);
+    db.close();
+  });
+
+  // ---- V: backup-before-migration tests ----
+
+  it('backupDatabase copies the file and returns backup path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pcc-backup-'));
+    const dbPath = join(dir, 'test.sqlite');
+    const db = openDatabase(dbPath);
+    db.close();
+
+    const backupPath = backupDatabase(dbPath);
+    expect(backupPath).toMatch(/\.backup\.\d{4}-/);
+    expect(existsSync(backupPath)).toBe(true);
+  });
+
+  it('backupDatabase returns original path when file does not exist', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'pcc-nofile-')), 'nonexistent.sqlite');
+    const result = backupDatabase(dbPath);
+    expect(result).toBe(dbPath);
+  });
+
+  it('resolveUrls merges extractRegex from selector config', () => {
+    const db = tempDb();
+    const config = makeConfig({ extractRegex: '(\\d+)' });
+    seedFromConfig(db, config);
+
+    const resolved = resolveUrls(db, config);
+
+    expect(resolved[0]?.targets[0]?.extractRegex).toBe('(\\d+)');
+    db.close();
+  });
+
   it('seedFromConfig is idempotent — re-seeding updates without duplicating rows', () => {
     const db = tempDb();
     const config = makeConfig();
@@ -151,6 +214,7 @@ interface MakeConfigOptions {
   tags?: string[];
   selectorOverrides?: { ignorePatterns?: string[]; waitForSelector?: string };
   normalizeOverride?: { caseInsensitive?: boolean };
+  extractRegex?: string;
 }
 
 function makeConfig(opts: MakeConfigOptions = {}): AppConfig {
@@ -193,7 +257,8 @@ function makeConfig(opts: MakeConfigOptions = {}): AppConfig {
             initialLastContent: 'old',
             ignorePatterns: opts.selectorOverrides?.ignorePatterns ?? [],
             waitForSelector: opts.selectorOverrides?.waitForSelector,
-            normalizeOverride: opts.normalizeOverride
+            normalizeOverride: opts.normalizeOverride,
+            extractRegex: opts.extractRegex
           }
         ],
         loginChecks: [

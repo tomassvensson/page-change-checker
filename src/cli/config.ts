@@ -103,7 +103,8 @@ const selectorSchema = z.object({
     .optional(),
   ignorePatterns: z.array(z.string()).default([]),
   waitForSelector: z.string().min(1).optional(),
-  waitForSelectorTimeoutMs: z.number().int().positive().optional()
+  waitForSelectorTimeoutMs: z.number().int().positive().optional(),
+  extractRegex: z.string().min(1).optional()
 });
 
 const loginCheckSchema = selectorSchema.extend({
@@ -142,7 +143,10 @@ const appConfigSchema = z.object({
   screenshot: z
     .object({
       onChange: z.boolean().default(true),
-      dir: z.string().min(1).default('screenshots')
+      dir: z.string().min(1).default('screenshots'),
+      mode: z.enum(['page', 'element']).default('page'),
+      maxAgeDays: z.number().int().positive().optional(),
+      maxCount: z.number().int().positive().optional()
     })
     .optional(),
   notifications: z
