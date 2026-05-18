@@ -23,12 +23,13 @@ FROM node:22-bookworm AS runtime
 
 WORKDIR /app
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # Copy the fully-compiled node_modules from the build stage and prune dev
 # dependencies in-place. This avoids recompiling native modules (e.g.
 # better-sqlite3) inside a minimal runtime image that has no build tools.
 COPY package*.json ./
 COPY --from=build /app/node_modules ./node_modules
-RUN npm prune --omit=dev
 
 # Install Chromium system dependencies for Debian 12 (bookworm).
 # We install these explicitly instead of using `playwright install --with-deps`
@@ -58,8 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Download the Chromium binary (system deps already installed above).
-RUN npx playwright install chromium
+# Download the Chromium binary while the Playwright CLI is still present, then
+# prune dev dependencies for the final runtime image.
+RUN ./node_modules/.bin/playwright install chromium \
+    && npm prune --omit=dev
 
 # Copy compiled output from the build stage
 COPY --from=build /app/dist ./dist
