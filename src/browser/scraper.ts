@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { chromium, type BrowserContext, type Page } from 'playwright';
@@ -245,7 +245,32 @@ async function scrapeOne(
       const slug = new URL(loadedUrl.url.url).hostname.replace(/[^a-z0-9]/gi, '-');
       const filename = `${slug}-${loadedUrl.url.id}-${timestamp}.png`;
       screenshotPath = resolve(config.screenshot.dir, filename);
-      await page.screenshot({ path: screenshotPath, fullPage: true });
+
+      const screenshotMode = config.screenshot.mode ?? 'page';
+      if (screenshotMode === 'element') {
+        // AB: find the first changed target and screenshot its element.
+        const changedTarget = targets.find((t) => t.changed === true);
+        const elementHandle = changedTarget
+          ? await page
+              .locator(changedTarget.cssPath)
+              .nth(changedTarget.elementIndex)
+              .elementHandle()
+          : null;
+        if (elementHandle) {
+          await elementHandle.screenshot({ path: screenshotPath });
+        } else {
+          // Fall back to full-page if element not found.
+          await page.screenshot({ path: screenshotPath, fullPage: true });
+        }
+      } else {
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+      }
+
+      // AC: clean up old screenshots after capturing a new one.
+      await pruneScreenshots(config.screenshot.dir, slug, {
+        maxAgeDays: config.screenshot.maxAgeDays,
+        maxCount: config.screenshot.maxCount
+      });
     }
 
     return {
@@ -325,7 +350,8 @@ async function evaluateLoginChecks(
       elementIndex: check.elementIndex,
       compareMode: check.compareMode,
       waitForSelector: null,
-      waitForSelectorTimeoutMs: 5000
+      waitForSelectorTimeoutMs: 5000,
+      extractRegex: null
     });
     const matched =
       read.exists &&
@@ -372,7 +398,8 @@ async function waitForInteractiveLogin(
           elementIndex: check.elementIndex,
           compareMode: check.compareMode,
           waitForSelector: null,
-          waitForSelectorTimeoutMs: 5000
+          waitForSelectorTimeoutMs: 5000,
+          extractRegex: null
         });
         return (
           read.exists &&
@@ -431,6 +458,78 @@ function groupByHost(urls: LoadedUrl[]): Map<string, LoadedUrl[]> {
     grouped.set(host, group);
   }
   return grouped;
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot retention cleanup (AC)
+// ---------------------------------------------------------------------------
+
+interface PruneOptions {
+  maxAgeDays?: number;
+  maxCount?: number;
+}
+
+/**
+ * Delete old screenshots from `dir` whose filename starts with `slug`.
+ * Enforces both an age limit (`maxAgeDays`) and a count limit (`maxCount`).
+ * Errors are swallowed — a failed cleanup must not abort the scrape run.
+ */
+async function pruneScreenshots(dir: string, slug: string, opts: PruneOptions): Promise<void> {
+  if (!opts.maxAgeDays && !opts.maxCount) return;
+
+  let entries: string[];
+  try {
+    entries = (await readdir(resolve(dir)))
+      .filter((f) => f.startsWith(slug) && f.endsWith('.png'))
+      .map((f) => resolve(dir, f));
+  } catch {
+    return; // directory might not exist yet
+  }
+
+  // Gather mtime for sorting and age filtering.
+  const withStats = (
+    await Promise.all(
+      entries.map(async (p) => {
+        try {
+          const s = await stat(p);
+          return { path: p, mtimeMs: s.mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter((x): x is { path: string; mtimeMs: number } => x !== null);
+
+  // Sort oldest-first.
+  withStats.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  const toDelete = new Set<string>();
+
+  if (opts.maxAgeDays) {
+    const cutoff = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
+    for (const f of withStats) {
+      if (f.mtimeMs < cutoff) toDelete.add(f.path);
+    }
+  }
+
+  if (opts.maxCount) {
+    const remaining = withStats.filter((f) => !toDelete.has(f.path));
+    const excess = remaining.length - opts.maxCount;
+    for (let i = 0; i < excess; i++) {
+      const f = remaining[i];
+      if (f) toDelete.add(f.path);
+    }
+  }
+
+  await Promise.all(
+    [...toDelete].map(async (p) => {
+      try {
+        await rm(p);
+      } catch {
+        // Non-fatal.
+      }
+    })
+  );
 }
 
 export { resolveUrls } from '../storage/db.js';

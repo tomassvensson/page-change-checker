@@ -16,7 +16,12 @@ interface PageLike {
 
 type ReadableSelector = Pick<
   ResolvedTarget,
-  'cssPath' | 'elementIndex' | 'compareMode' | 'waitForSelector' | 'waitForSelectorTimeoutMs'
+  | 'cssPath'
+  | 'elementIndex'
+  | 'compareMode'
+  | 'waitForSelector'
+  | 'waitForSelectorTimeoutMs'
+  | 'extractRegex'
 >;
 
 /**
@@ -57,5 +62,31 @@ export async function readElementContent(
       ? await element.evaluate((node) => node.innerHTML)
       : await element.innerText();
 
-  return { exists: true, matchCount, content };
+  // AA: apply extractRegex to pull out a specific capture group.
+  const extracted = applyExtractRegex(content, selector.extractRegex ?? null);
+
+  return { exists: true, matchCount, content: extracted };
+}
+
+/**
+ * Apply an `extractRegex` pattern to raw element content. (AA)
+ *
+ * If the pattern has a capture group, returns the first capture group.
+ * If it has no capture groups, returns the full match.
+ * If the pattern doesn't match, returns the original content unchanged.
+ * If the pattern is invalid, returns the original content unchanged.
+ */
+function applyExtractRegex(content: string, pattern: string | null): string {
+  if (!pattern) return content;
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern);
+  } catch {
+    process.stderr.write(`[pageReader] invalid extractRegex "${pattern}" — ignored\n`);
+    return content;
+  }
+  const match = re.exec(content);
+  if (!match) return content;
+  // Use first capture group when present; fall back to full match.
+  return match[1] !== undefined ? match[1] : (match[0] ?? content);
 }

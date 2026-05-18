@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 import { Command } from 'commander';
 
@@ -11,10 +12,17 @@ import { openDatabase, resolveUrls, seedFromConfig } from '../storage/db.js';
 import { loadConfig } from './config.js';
 import { runForever } from './scheduler.js';
 
+// ---------------------------------------------------------------------------
+// Version — read from package.json at runtime so it stays in sync.
+// ---------------------------------------------------------------------------
+const _require = createRequire(import.meta.url);
+const { version } = _require('../../package.json') as { version: string };
+
 const program = new Command();
 
 program
   .name('page-change-checker')
+  .version(version, '-V, --version', 'print the version number and exit')
   .option('-c, --config <path>', 'config file path', 'config.json');
 
 program
@@ -160,5 +168,25 @@ function applyUrlFilters(urls: LoadedUrl[], opts: RunOptions): LoadedUrl[] {
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown — allow in-flight scrapes to finish before exiting.
+// ---------------------------------------------------------------------------
+let shuttingDown = false;
+
+function handleShutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  process.stderr.write(
+    `\n[cli] received ${signal} — waiting for in-flight operations to finish…\n`
+  );
+  // setInterval is cleared automatically when the process exits; we just let
+  // the event loop drain so any active awaits (DB writes, page.close()) can
+  // complete before Node exits with code 0.
+  process.exitCode = 0;
+}
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));
 
 await program.parseAsync();
