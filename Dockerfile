@@ -14,18 +14,21 @@ COPY src/ ./src/
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-# Stage 2 – Runtime (Playwright + Chromium)
+# Stage 2 – Runtime
 # ---------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.60.0-noble AS runtime
+FROM node:22-slim AS runtime
 
 WORKDIR /app
 
-# Install only production dependencies.
-# The base image already ships Chromium for Playwright v1.60.0, so there is no
-# need to run `playwright install` – the npm package will use the pre-installed
-# browser at /ms-playwright automatically.
+# Copy the fully-compiled node_modules from the build stage and prune dev
+# dependencies in-place. This avoids recompiling native modules (e.g.
+# better-sqlite3) inside a minimal runtime image that has no build tools.
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY --from=build /app/node_modules ./node_modules
+RUN npm prune --omit=dev
+
+# Download Chromium and its system dependencies for Playwright.
+RUN npx playwright install --with-deps chromium
 
 # Copy compiled output from the build stage
 COPY --from=build /app/dist ./dist
