@@ -19,7 +19,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2 – Runtime
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS runtime
+FROM node:22-bookworm AS runtime
 
 WORKDIR /app
 
@@ -31,8 +31,9 @@ COPY --from=build /app/node_modules ./node_modules
 RUN npm prune --omit=dev
 
 # Download Chromium and its system dependencies for Playwright.
-# apt-get update is required on slim images (package lists are empty by default).
-RUN apt-get update && npx playwright install --with-deps chromium && rm -rf /var/lib/apt/lists/*
+# node:22-bookworm (full, not slim) is required – playwright's --with-deps
+# relies on system libraries absent from the slim variant.
+RUN npx playwright install --with-deps chromium && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled output from the build stage
 COPY --from=build /app/dist ./dist
