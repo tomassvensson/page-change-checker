@@ -1,8 +1,8 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { loadConfig, parseConfig } from '../../src/cli/config.js';
 
@@ -39,8 +39,18 @@ describe('parseConfig', () => {
 });
 
 describe('loadConfig', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'pcc-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
   it('reads and parses a config file from disk', async () => {
-    const configPath = join(tmpdir(), `pcc-test-config-${Date.now()}.json`);
+    const configPath = join(tempDir, 'config.json');
     await writeFile(
       configPath,
       JSON.stringify({
@@ -54,6 +64,6 @@ describe('loadConfig', () => {
   });
 
   it('throws when the file cannot be read', async () => {
-    await expect(loadConfig(join(tmpdir(), 'nonexistent-pcc-config.json'))).rejects.toThrow();
+    await expect(loadConfig(join(tempDir, 'nonexistent.json'))).rejects.toThrow();
   });
 });

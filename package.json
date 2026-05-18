@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/cli/index.js run",
+    "start": "node dist/src/cli/index.js run",
     "dev": "tsx src/cli/index.ts",
     "scrape": "tsx src/cli/index.ts run",
     "schedule": "tsx src/cli/index.ts schedule",

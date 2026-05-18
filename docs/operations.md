@@ -32,7 +32,7 @@ After=network.target
 Type=simple
 User=pcc
 WorkingDirectory=/opt/page-change-checker
-ExecStart=/usr/bin/node /opt/page-change-checker/dist/cli/index.js schedule
+ExecStart=/usr/bin/node /opt/page-change-checker/dist/src/cli/index.js schedule
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -68,7 +68,7 @@ ExecStart=/usr/bin/npm run schedule
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Users/you/page-change-checker/dist/cli/index.js</string>
+    <string>/Users/you/page-change-checker/dist/src/cli/index.js</string>
     <string>schedule</string>
   </array>
   <key>WorkingDirectory</key>
