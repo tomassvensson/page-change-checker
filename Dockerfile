@@ -16,13 +16,16 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2 – Runtime (Playwright + Chromium)
 # ---------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.51.0-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy AS runtime
 
 WORKDIR /app
 
-# Install only production dependencies
+# Install only production dependencies.
+# The base image already ships Chromium for Playwright v1.60.0, so there is no
+# need to run `playwright install` – the npm package will use the pre-installed
+# browser at /ms-playwright automatically.
 COPY package*.json ./
-RUN npm ci --omit=dev && npx playwright install --with-deps chromium
+RUN npm ci --omit=dev
 
 # Copy compiled output from the build stage
 COPY --from=build /app/dist ./dist
@@ -32,5 +35,5 @@ VOLUME ["/app/data"]
 
 ENV NODE_ENV=production
 
-ENTRYPOINT ["node", "dist/cli/index.js"]
+ENTRYPOINT ["node", "dist/src/cli/index.js"]
 CMD ["schedule"]
