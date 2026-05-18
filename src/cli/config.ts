@@ -125,7 +125,7 @@ const appConfigSchema = z.object({
       z.object({
         enabled: z.boolean().default(true),
         tags: z.array(z.string()).default([]),
-        url: z.string().url(),
+        url: z.url(),
         overrides: z
           .object({
             viewport: viewportSchema.optional(),
@@ -151,8 +151,8 @@ const appConfigSchema = z.object({
       email: z
         .object({
           enabled: z.boolean().default(false),
-          from: z.string().email(),
-          to: z.array(z.string().email()).min(1),
+          from: z.email(),
+          to: z.array(z.email()).min(1),
           subject: z.string().default('[page-change-checker] Change detected'),
           smtp: z.object({
             host: z.string().min(1),
@@ -171,7 +171,7 @@ const appConfigSchema = z.object({
         .array(
           z.object({
             enabled: z.boolean().default(true),
-            url: z.string().url(),
+            url: z.url(),
             format: z.enum(['generic', 'slack', 'discord', 'teams']).default('generic'),
             headers: z.record(z.string(), z.string()).default({})
           })

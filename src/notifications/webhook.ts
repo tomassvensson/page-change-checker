@@ -33,7 +33,7 @@ function buildTeamsPayload(results: UrlScrapeResult[]): unknown {
   );
   return {
     '@type': 'MessageCard',
-    '@context': 'http://schema.org/extensions',
+    '@context': 'https://schema.org/extensions',
     summary: 'page-change-checker notification',
     text: lines.length > 0 ? lines.join('\n\n') : 'page-change-checker: no changes detected'
   };
