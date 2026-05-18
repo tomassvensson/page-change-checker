@@ -16,7 +16,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2 – Runtime (Playwright + Chromium)
 # ---------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.60.0-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.60.0-noble AS runtime
 
 WORKDIR /app
 
