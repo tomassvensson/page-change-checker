@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -7,7 +8,6 @@ import { classifyError } from '../core/errors.js';
 import { processContent } from '../core/normalize.js';
 import type {
   AppConfig,
-  ConcurrencyConfig,
   LoadedUrl,
   LoginCheckRecord,
   LoginCheckResult,
@@ -18,7 +18,6 @@ import type {
   UrlScrapeResult
 } from '../core/types.js';
 import {
-  resolveUrls,
   updateLoginCheckResult,
   updateTargetContent,
   updateUrlStatus,
@@ -68,7 +67,8 @@ function sleep(ms: number): Promise<void> {
 async function jitteredDelay(config: RateLimitConfig): Promise<void> {
   const { minDelayMs, maxDelayMs } = config;
   if (maxDelayMs <= 0) return;
-  const delay = minDelayMs + Math.random() * Math.max(0, maxDelayMs - minDelayMs);
+  const range = Math.max(1, maxDelayMs - minDelayMs);
+  const delay = minDelayMs + randomInt(0, range);
   await sleep(delay);
 }
 
@@ -282,9 +282,9 @@ async function evaluateTargets(
 
     // O, P: normalise and apply ignore patterns before comparing
     const processedNew =
-      read.content !== null
-        ? processContent(read.content, target.normalizeConfig, target.ignorePatterns)
-        : null;
+      read.content === null
+        ? null
+        : processContent(read.content, target.normalizeConfig, target.ignorePatterns);
 
     const changed =
       processedNew !== null && target.lastContent !== null
@@ -433,7 +433,7 @@ function groupByHost(urls: LoadedUrl[]): Map<string, LoadedUrl[]> {
   return grouped;
 }
 
-export { resolveUrls };
+export { resolveUrls } from '../storage/db.js';
 
 // Re-export types needed by callers
-export type { ConcurrencyConfig };
+export type { ConcurrencyConfig } from '../core/types.js';
