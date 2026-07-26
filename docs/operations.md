@@ -16,7 +16,13 @@ npm run schedule
 
 Runs immediately, then repeats every `schedule.intervalHours` hours.
 If a run is still in progress when the next tick fires, the tick is skipped and a
-warning is logged — overlapping runs are never started.
+warning is logged — overlapping runs are never started. `SIGINT` and `SIGTERM`
+cancel pending waits, close active browser contexts, wait for cleanup, and release
+the database lock.
+
+A stale-aware lock file next to SQLite prevents two processes from using the same
+database/profile state. Use separate `databasePath` and `browser.userDataDir`
+values when intentionally running independent instances.
 
 ## Linux — systemd
 
@@ -35,6 +41,9 @@ WorkingDirectory=/opt/page-change-checker
 ExecStart=/usr/bin/node /opt/page-change-checker/dist/src/cli/index.js schedule
 Restart=on-failure
 RestartSec=10s
+TimeoutStopSec=60s
+UMask=0077
+NoNewPrivileges=true
 StandardOutput=journal
 StandardError=journal
 
@@ -93,7 +102,7 @@ launchctl start com.page-change-checker
 ```powershell
 $action  = New-ScheduledTaskAction `
   -Execute "node" `
-  -Argument "dist\cli\index.js schedule" `
+  -Argument "dist\src\cli\index.js schedule" `
   -WorkingDirectory "C:\path\to\page-change-checker"
 
 $trigger = New-ScheduledTaskTrigger -AtStartup
@@ -104,16 +113,16 @@ Register-ScheduledTask `
   -TaskName "PageChangeChecker" `
   -Action $action `
   -Trigger $trigger `
-  -Settings $settings `
-  -RunLevel Highest
+  -Settings $settings
 ```
 
 ## Capturing output
 
-The tool writes to stdout only. To save output:
+Reports and machine-readable `--json` output go to stdout. Correlated structured
+logs go to stderr so logging cannot corrupt JSON pipelines.
 
 ```bash
-npm run scrape >> logs/scrape.log 2>&1
+npm run scrape > logs/report.log 2> logs/runtime.log
 ```
 
 Or with timestamps:
@@ -122,6 +131,37 @@ Or with timestamps:
 npm run scrape 2>&1 | ts '[%Y-%m-%d %H:%M:%S]' >> logs/scrape.log
 # requires `moreutils` (apt install moreutils / brew install moreutils)
 ```
+
+## Docker Compose
+
+The provided image runs as UID 1000. Its root filesystem is read-only and all
+Linux capabilities are dropped. It installs only Chromium's headless shell;
+interactive login requires a separate visible environment or a custom image and
+display setup.
+
+```bash
+cp config.example.json config.json
+mkdir -p data screenshots
+chown -R 1000:1000 data screenshots  # Linux bind mounts
+docker compose up --build -d
+docker compose logs -f
+```
+
+Only `data/`, `screenshots/`, and bounded tmpfs paths are writable. Keep secrets
+in an ignored `.env` file or an external secret manager and reference complete
+values from config as `${NAME}`.
+
+For high-assurance deployments, add an outbound firewall/proxy allowlist. The
+application network guard is defense in depth, not a replacement for network
+segmentation.
+
+## Backup and restore
+
+Before changing an existing schema, the application creates an integrity-checked
+`*.backup.*` SQLite snapshot using `VACUUM INTO`; committed WAL state is included.
+Stop the service before manual restore, preserve the failed database for
+forensics, and copy the selected backup into `databasePath` with owner-only
+permissions.
 
 ## Sending notifications
 
