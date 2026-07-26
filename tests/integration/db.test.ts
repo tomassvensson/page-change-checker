@@ -1,10 +1,13 @@
-import { mkdtempSync, existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import Database from 'better-sqlite3';
 
 import type { AppConfig } from '../../src/core/types.js';
 import {
   backupDatabase,
+  commitScrapeObservation,
   loadEnabledUrls,
   migrate,
   openDatabase,
@@ -117,6 +120,28 @@ describe('database integration', () => {
     db.close();
   });
 
+  it('resolves brand-new config for dry-run without mutating the database', () => {
+    const db = tempDb();
+    const config = makeConfig();
+
+    const resolved = resolveUrls(db, config, { includeUnseeded: true });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.url.id).toBeLessThan(0);
+    expect(resolved[0]?.targets[0]?.id).toBeLessThan(0);
+    expect(resolved[0]?.targets[0]?.lastContent).toBe('old');
+    expect(
+      (db.prepare('SELECT count(*) AS count FROM urls').get() as { count: number }).count
+    ).toBe(0);
+    db.close();
+  });
+
+  it('fails closed when normal resolution finds unseeded database state', () => {
+    const db = tempDb();
+    expect(() => resolveUrls(db, makeConfig())).toThrow('Database row missing');
+    db.close();
+  });
+
   it('migrate is idempotent (running twice does not throw)', () => {
     const db = tempDb();
     expect(() => migrate(db)).not.toThrow();
@@ -161,17 +186,28 @@ describe('database integration', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pcc-backup-'));
     const dbPath = join(dir, 'test.sqlite');
     const db = openDatabase(dbPath);
-    db.close();
+    db.exec('CREATE TABLE backup_probe (value TEXT NOT NULL)');
+    db.prepare('INSERT INTO backup_probe (value) VALUES (?)').run('latest WAL value');
 
-    const backupPath = backupDatabase(dbPath);
+    const backupPath = backupDatabase(db, dbPath);
     expect(backupPath).toMatch(/\.backup\.\d{4}-/);
     expect(existsSync(backupPath)).toBe(true);
+
+    const backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+    expect(
+      (backup.prepare('SELECT value FROM backup_probe').get() as { value: string }).value
+    ).toBe('latest WAL value');
+    expect(backup.pragma('integrity_check', { simple: true })).toBe('ok');
+    backup.close();
+    db.close();
   });
 
   it('backupDatabase returns original path when file does not exist', () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), 'pcc-nofile-')), 'nonexistent.sqlite');
-    const result = backupDatabase(dbPath);
+    const db = openDatabase(':memory:');
+    const result = backupDatabase(db, dbPath);
     expect(result).toBe(dbPath);
+    db.close();
   });
 
   it('resolveUrls merges extractRegex from selector config', () => {
@@ -191,6 +227,79 @@ describe('database integration', () => {
     seedFromConfig(db, config);
     seedFromConfig(db, config); // run again
     expect(loadEnabledUrls(db)).toHaveLength(1);
+    db.close();
+  });
+
+  it('treats config as authoritative and disables removed URLs and targets', () => {
+    const db = tempDb();
+    const config = makeConfig();
+    const withExtraTarget: AppConfig = {
+      ...config,
+      urls: config.urls.map((url) => ({
+        ...url,
+        selectors: [
+          ...url.selectors,
+          {
+            cssPath: '.secondary',
+            elementIndex: 0,
+            compareMode: 'innerText',
+            enabled: true
+          }
+        ]
+      }))
+    };
+    seedFromConfig(db, withExtraTarget);
+    expect(loadEnabledUrls(db)[0]?.targets).toHaveLength(2);
+
+    seedFromConfig(db, config);
+    expect(loadEnabledUrls(db)[0]?.targets).toHaveLength(1);
+
+    seedFromConfig(db, { ...config, urls: [] });
+    expect(loadEnabledUrls(db)).toHaveLength(0);
+    expect(resolveUrls(db, { ...config, urls: [] })).toHaveLength(0);
+    db.close();
+  });
+
+  it('removes login checks deleted from configuration', () => {
+    const db = tempDb();
+    const config = makeConfig();
+    seedFromConfig(db, config);
+    seedFromConfig(db, {
+      ...config,
+      urls: config.urls.map((url) => ({ ...url, loginChecks: [] }))
+    });
+
+    expect(loadEnabledUrls(db)[0]?.loginChecks).toHaveLength(0);
+    db.close();
+  });
+
+  it('rolls back an observation when any referenced row is missing', () => {
+    const db = tempDb();
+    seedFromConfig(db, makeConfig());
+    const [url] = loadEnabledUrls(db);
+    const target = url?.targets[0];
+    const loginCheck = url?.loginChecks[0];
+    if (!url || !target || !loginCheck) throw new Error('expected seeded rows');
+
+    expect(() =>
+      commitScrapeObservation(db, {
+        urlId: url.url.id,
+        httpStatus: 202,
+        loginChecks: [{ id: loginCheck.id, content: 'new account', matched: true }],
+        targets: [
+          { id: target.id, content: 'new target' },
+          { id: 999_999, content: 'missing target' }
+        ]
+      })
+    ).toThrow('changed 0 rows');
+
+    const [unchanged] = loadEnabledUrls(db);
+    expect(unchanged?.targets[0]?.lastContent).toBe('old');
+    expect(unchanged?.loginChecks[0]?.lastSeenContent).toBeNull();
+    const status = db
+      .prepare('SELECT last_http_status AS status FROM urls WHERE id = ?')
+      .get(url.url.id) as { status: number | null };
+    expect(status.status).toBeNull();
     db.close();
   });
 
@@ -220,14 +329,16 @@ interface MakeConfigOptions {
 function makeConfig(opts: MakeConfigOptions = {}): AppConfig {
   return {
     databasePath: 'unused.sqlite',
+    network: { allowPrivateAddresses: false, allowedHosts: [] },
     normalize: { trimWhitespace: true, collapseWhitespace: true, caseInsensitive: false },
-    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1 },
+    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1, maxDelayMs: 0 },
     concurrency: { global: 1, perHost: 1 },
     rateLimit: { minDelayMs: 0, maxDelayMs: 0 },
     browser: {
       headless: true,
       userDataDir: 'unused-user-data',
       timeoutMs: 1000,
+      maxContentLength: 2_000_000,
       waitUntil: 'domcontentloaded',
       userAgent: 'test-agent',
       locale: 'de-DE',

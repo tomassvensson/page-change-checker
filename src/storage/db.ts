@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import Database from 'better-sqlite3';
@@ -11,7 +12,6 @@ import type {
   NormalizeConfig,
   ResolvedTarget,
   SelectorConfig,
-  UrlConfig,
   UrlRecord,
   WatchTargetRecord
 } from '../core/types.js';
@@ -68,61 +68,113 @@ const MIGRATIONS: Migration[] = [
   }
 ];
 
-/**
- * Back up the database file to `<path>.backup.<timestamp>` before the first
- * pending migration is applied, so a failed migration is always recoverable.
- */
-export function backupDatabase(path: string): string {
-  if (!existsSync(path)) return path; // nothing to back up on first run
+/** Create and integrity-check a transactionally consistent SQLite backup. */
+export function backupDatabase(db: SqliteDatabase, path: string): string {
+  if (!existsSync(path) || path === ':memory:') return path;
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = `${path}.backup.${ts}`;
-  copyFileSync(path, dest);
+  const dest = `${path}.backup.${ts}.${randomUUID().slice(0, 8)}`;
+  db.prepare('VACUUM INTO ?').run(dest);
+  try {
+    chmodSync(dest, 0o600);
+  } catch {
+    // Windows and some mounted filesystems do not implement POSIX permissions.
+  }
+
+  const backup = new Database(dest, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = backup.pragma('integrity_check', { simple: true });
+    if (integrity !== 'ok') {
+      throw new Error(`SQLite backup integrity check failed: ${String(integrity)}`);
+    }
+  } finally {
+    backup.close();
+  }
   return dest;
 }
 
 export function openDatabase(path: string): SqliteDatabase {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  migrate(db, path);
-  return db;
+  try {
+    secureDatabaseFile(path);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    migrate(db, path);
+    secureDatabaseFile(path);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+function secureDatabaseFile(path: string): void {
+  if (path === ':memory:') return;
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Windows and some mounted filesystems do not implement POSIX permissions.
+  }
 }
 
 export function migrate(db: SqliteDatabase, dbPath?: string): void {
-  // Create the migrations tracking table if it doesn't exist yet.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      version  INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-
-  const applied = new Set(
-    (db.prepare('SELECT version FROM schema_migrations').all() as Array<{ version: number }>).map(
-      (r) => r.version
-    )
+  const migrationTableExists = Boolean(
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1"
+      )
+      .get()
   );
+  const applied = migrationTableExists
+    ? new Set(
+        (
+          db.prepare('SELECT version FROM schema_migrations').all() as Array<{ version: number }>
+        ).map((row) => row.version)
+      )
+    : new Set<number>();
 
   const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
-  if (pending.length === 0) return;
+  const applicationTablesExist = Boolean(
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('urls', 'watch_targets', 'login_checks') LIMIT 1"
+      )
+      .get()
+  );
+  const legacyColumnChanges =
+    columnMissing(db, 'urls', 'tags') ||
+    columnMissing(db, 'watch_targets', 'name') ||
+    columnMissing(db, 'watch_targets', 'enabled');
 
-  // Back up the database before applying any new migration.
-  if (dbPath) {
-    backupDatabase(dbPath);
+  if (
+    dbPath &&
+    dbPath !== ':memory:' &&
+    existsSync(dbPath) &&
+    statSync(dbPath).size > 0 &&
+    applicationTablesExist &&
+    (pending.length > 0 || legacyColumnChanges)
+  ) {
+    backupDatabase(db, dbPath);
   }
 
-  for (const migration of pending) {
-    db.transaction(() => {
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version  INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    for (const migration of pending) {
       db.exec(migration.sql);
       db.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(migration.version);
-    })();
-  }
+    }
 
-  // Additive column migrations for databases that pre-date the migration table.
-  addColumnIfMissing(db, 'urls', 'tags', 'TEXT');
-  addColumnIfMissing(db, 'watch_targets', 'name', 'TEXT');
-  addColumnIfMissing(db, 'watch_targets', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+    // Additive column migrations for databases that pre-date the migration table.
+    addColumnIfMissing(db, 'urls', 'tags', 'TEXT');
+    addColumnIfMissing(db, 'watch_targets', 'name', 'TEXT');
+    addColumnIfMissing(db, 'watch_targets', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+  })();
 }
 
 function addColumnIfMissing(
@@ -137,6 +189,15 @@ function addColumnIfMissing(
   }
 }
 
+function columnMissing(db: SqliteDatabase, table: string, column: string): boolean {
+  const tableExists = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(table)
+  );
+  if (!tableExists) return false;
+  const columns = db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+  return !columns.some((candidate) => candidate.name === column);
+}
+
 function effectiveNormalize(appConfig: AppConfig, selectorConfig: SelectorConfig): NormalizeConfig {
   return selectorConfig.normalizeOverride
     ? { ...appConfig.normalize, ...selectorConfig.normalizeOverride }
@@ -145,6 +206,11 @@ function effectiveNormalize(appConfig: AppConfig, selectorConfig: SelectorConfig
 
 export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
   const tx = db.transaction(() => {
+    // Configuration is authoritative. Missing URLs/targets are disabled before
+    // configured rows are re-enabled by the upserts below.
+    db.prepare('UPDATE urls SET enabled = 0').run();
+    db.prepare('UPDATE watch_targets SET enabled = 0').run();
+
     const upsertUrl = db.prepare(`
       INSERT INTO urls (url, enabled, tags)
       VALUES (@url, @enabled, @tags)
@@ -161,6 +227,7 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
       DO UPDATE SET
         name = excluded.name,
         enabled = excluded.enabled
+      RETURNING id
     `);
     const upsertLoginCheck = db.prepare(`
       INSERT INTO login_checks (
@@ -173,6 +240,7 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
       DO UPDATE SET
         expected_content = excluded.expected_content,
         description = excluded.description
+      RETURNING id
     `);
 
     for (const urlConfig of config.urls) {
@@ -193,7 +261,7 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
             ? null
             : processContent(selector.initialLastContent, norm, ignore);
 
-        upsertTarget.run({
+        upsertTarget.get({
           urlId,
           name: selector.name ?? null,
           cssPath: selector.cssPath,
@@ -204,15 +272,27 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
         });
       }
 
+      const activeLoginCheckIds: number[] = [];
       for (const loginCheck of urlConfig.loginChecks ?? []) {
-        upsertLoginCheck.run({
+        const row = upsertLoginCheck.get({
           urlId,
           cssPath: loginCheck.cssPath,
           elementIndex: loginCheck.elementIndex,
           compareMode: loginCheck.compareMode,
           expectedContent: loginCheck.expectedContent ?? null,
           description: loginCheck.description ?? null
-        });
+        }) as { id: number };
+        activeLoginCheckIds.push(row.id);
+      }
+
+      if (activeLoginCheckIds.length === 0) {
+        db.prepare('DELETE FROM login_checks WHERE url_id = ?').run(urlId);
+      } else {
+        const placeholders = activeLoginCheckIds.map(() => '?').join(', ');
+        db.prepare(`DELETE FROM login_checks WHERE url_id = ? AND id NOT IN (${placeholders})`).run(
+          urlId,
+          ...activeLoginCheckIds
+        );
       }
     }
   });
@@ -221,8 +301,14 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
 }
 
 export function loadEnabledUrls(db: SqliteDatabase): LoadedUrl[] {
+  return loadUrls(db, true);
+}
+
+function loadUrls(db: SqliteDatabase, enabledOnly: boolean): LoadedUrl[] {
   const urls = db
-    .prepare('SELECT id, url, enabled, tags FROM urls WHERE enabled = 1 ORDER BY id')
+    .prepare(
+      `SELECT id, url, enabled, tags FROM urls ${enabledOnly ? 'WHERE enabled = 1' : ''} ORDER BY id`
+    )
     .all() as UrlRecord[];
 
   const targetStmt = db.prepare(`
@@ -236,7 +322,7 @@ export function loadEnabledUrls(db: SqliteDatabase): LoadedUrl[] {
       last_content AS lastContent,
       enabled
     FROM watch_targets
-    WHERE url_id = ? AND enabled = 1
+    WHERE url_id = ? ${enabledOnly ? 'AND enabled = 1' : ''}
     ORDER BY id
   `);
 
@@ -277,47 +363,112 @@ export function loadEnabledUrls(db: SqliteDatabase): LoadedUrl[] {
  * waitForSelector, per-URL overrides, tags) to produce the full LoadedUrl list
  * used by the scraper. Also respects the per-URL enabled flag in config (S). (T, O, P, AA, Z)
  */
-export function resolveUrls(db: SqliteDatabase, config: AppConfig): LoadedUrl[] {
-  const configUrlMap = new Map<string, UrlConfig>(config.urls.map((u) => [u.url, u]));
+export function resolveUrls(
+  db: SqliteDatabase,
+  config: AppConfig,
+  options: { includeUnseeded?: boolean } = {}
+): LoadedUrl[] {
+  const loadedByUrl = new Map(loadUrls(db, false).map((loaded) => [loaded.url.url, loaded]));
+  let syntheticId = -1;
 
-  return loadEnabledUrls(db)
-    .filter((loaded) => {
-      const urlCfg = configUrlMap.get(loaded.url.url);
-      // If the URL exists in config and is explicitly disabled there, skip it.
-      return urlCfg?.enabled !== false;
-    })
-    .map((loaded) => {
-      const urlCfg = configUrlMap.get(loaded.url.url);
+  return config.urls.flatMap((urlCfg) => {
+    if (!urlCfg.enabled) return [];
 
-      const resolvedTargets: ResolvedTarget[] = loaded.targets.map((target) => {
-        const selCfg = urlCfg?.selectors.find(
-          (s) =>
-            s.cssPath === target.cssPath &&
-            s.elementIndex === target.elementIndex &&
-            s.compareMode === target.compareMode
-        );
+    let loaded = loadedByUrl.get(urlCfg.url);
+    if (!loaded) {
+      if (!options.includeUnseeded) {
+        throw new Error(`Database row missing for configured URL ${urlCfg.url}`);
+      }
+      loaded = {
+        url: {
+          id: syntheticId--,
+          url: urlCfg.url,
+          enabled: 1,
+          tags: null
+        },
+        tags: [],
+        overrides: null,
+        targets: [],
+        loginChecks: []
+      };
+    }
 
-        const normalizeConfig: NormalizeConfig = selCfg?.normalizeOverride
-          ? { ...config.normalize, ...selCfg.normalizeOverride }
-          : { ...config.normalize };
+    const resolvedTargets: ResolvedTarget[] = urlCfg.selectors.flatMap((selCfg) => {
+      if (!selCfg.enabled) return [];
+      const existing = loaded.targets.find(
+        (target) =>
+          target.cssPath === selCfg.cssPath &&
+          target.elementIndex === selCfg.elementIndex &&
+          target.compareMode === selCfg.compareMode
+      );
+      if (!existing && !options.includeUnseeded) {
+        throw new Error(`Database row missing for configured selector ${selCfg.cssPath}`);
+      }
 
-        return {
-          ...target,
+      const normalizeConfig: NormalizeConfig = selCfg.normalizeOverride
+        ? { ...config.normalize, ...selCfg.normalizeOverride }
+        : { ...config.normalize };
+      const lastContent = existing
+        ? existing.lastContent
+        : selCfg.initialLastContent === undefined
+          ? null
+          : processContent(selCfg.initialLastContent, normalizeConfig, selCfg.ignorePatterns ?? []);
+
+      return [
+        {
+          id: existing?.id ?? syntheticId--,
+          urlId: loaded.url.id,
+          name: selCfg.name ?? existing?.name ?? null,
+          cssPath: selCfg.cssPath,
+          elementIndex: selCfg.elementIndex,
+          compareMode: selCfg.compareMode,
+          lastContent,
+          enabled: 1,
           normalizeConfig,
-          ignorePatterns: selCfg?.ignorePatterns ?? [],
-          waitForSelector: selCfg?.waitForSelector ?? null,
-          waitForSelectorTimeoutMs: selCfg?.waitForSelectorTimeoutMs ?? config.browser.timeoutMs,
-          extractRegex: selCfg?.extractRegex ?? null
+          ignorePatterns: selCfg.ignorePatterns ?? [],
+          waitForSelector: selCfg.waitForSelector ?? null,
+          waitForSelectorTimeoutMs: selCfg.waitForSelectorTimeoutMs ?? config.browser.timeoutMs,
+          extractRegex: selCfg.extractRegex ?? null
+        }
+      ];
+    });
+
+    const loginChecks: LoginCheckRecord[] = (urlCfg.loginChecks ?? [])
+      .filter((configured) => configured.enabled)
+      .map((configured) => {
+        const existing = loaded.loginChecks.find(
+          (check) =>
+            check.cssPath === configured.cssPath &&
+            check.elementIndex === configured.elementIndex &&
+            check.compareMode === configured.compareMode
+        );
+        if (!existing && !options.includeUnseeded) {
+          throw new Error(`Database row missing for configured login check ${configured.cssPath}`);
+        }
+        return {
+          id: existing?.id ?? syntheticId--,
+          urlId: loaded.url.id,
+          cssPath: configured.cssPath,
+          elementIndex: configured.elementIndex,
+          compareMode: configured.compareMode,
+          expectedContent: configured.expectedContent ?? null,
+          description: configured.description ?? null,
+          lastSeenContent: existing?.lastSeenContent ?? null,
+          lastMatched: existing?.lastMatched ?? null
         };
       });
 
-      return {
+    return [
+      {
         ...loaded,
-        tags: urlCfg?.tags ?? loaded.tags,
-        overrides: urlCfg?.overrides ?? null,
-        targets: resolvedTargets
-      };
-    });
+        url: { ...loaded.url, enabled: 1 },
+        tags: urlCfg.tags,
+        overrides: urlCfg.overrides ?? null,
+        targets: resolvedTargets,
+        loginChecks
+      }
+    ];
+  });
 }
 
 function parseTags(raw: string | null): string[] {
@@ -332,13 +483,17 @@ function parseTags(raw: string | null): string[] {
 }
 
 export function updateUrlStatus(db: SqliteDatabase, urlId: number, status: number | null): void {
-  db.prepare(
-    "UPDATE urls SET last_http_status = ?, last_checked_at = datetime('now') WHERE id = ?"
-  ).run(status, urlId);
+  const result = db
+    .prepare("UPDATE urls SET last_http_status = ?, last_checked_at = datetime('now') WHERE id = ?")
+    .run(status, urlId);
+  assertExactlyOneRow(result.changes, 'URL', urlId);
 }
 
 export function updateTargetContent(db: SqliteDatabase, targetId: number, content: string): void {
-  db.prepare('UPDATE watch_targets SET last_content = ? WHERE id = ?').run(content, targetId);
+  const result = db
+    .prepare('UPDATE watch_targets SET last_content = ? WHERE id = ?')
+    .run(content, targetId);
+  assertExactlyOneRow(result.changes, 'watch target', targetId);
 }
 
 export function updateLoginCheckResult(
@@ -347,9 +502,46 @@ export function updateLoginCheckResult(
   content: string | null,
   matched: boolean
 ): void {
-  db.prepare('UPDATE login_checks SET last_seen_content = ?, last_matched = ? WHERE id = ?').run(
-    content,
-    matched ? 1 : 0,
-    checkId
-  );
+  const result = db
+    .prepare('UPDATE login_checks SET last_seen_content = ?, last_matched = ? WHERE id = ?')
+    .run(content, matched ? 1 : 0, checkId);
+  assertExactlyOneRow(result.changes, 'login check', checkId);
+}
+
+export interface ScrapeObservationCommit {
+  urlId: number;
+  httpStatus: number | null;
+  loginChecks: Array<{
+    id: number;
+    content: string | null;
+    matched: boolean;
+  }>;
+  targets: Array<{
+    id: number;
+    content: string;
+  }>;
+}
+
+/** Persist one complete observation atomically after all reads and validation succeed. */
+export function commitScrapeObservation(
+  db: SqliteDatabase,
+  observation: ScrapeObservationCommit
+): void {
+  db.transaction(() => {
+    updateUrlStatus(db, observation.urlId, observation.httpStatus);
+    for (const check of observation.loginChecks) {
+      updateLoginCheckResult(db, check.id, check.content, check.matched);
+    }
+    for (const target of observation.targets) {
+      updateTargetContent(db, target.id, target.content);
+    }
+  })();
+}
+
+function assertExactlyOneRow(changes: number, entity: string, id: number): void {
+  if (changes !== 1) {
+    throw new Error(
+      `Expected to update ${entity} ${id.toString()}, changed ${changes.toString()} rows`
+    );
+  }
 }

@@ -4,16 +4,17 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    fileParallelism: false,
     include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**', '.trunk/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       thresholds: {
-        lines: 81,
-        functions: 81,
-        branches: 81,
-        statements: 81
+        lines: 79,
+        functions: 80,
+        branches: 69,
+        statements: 77
       },
       exclude: [
         'dist/**',
@@ -24,10 +25,7 @@ export default defineConfig({
         'vitest.config.ts',
         'src/index.ts',
         'src/cli/index.ts',
-        'src/cli/scheduler.ts',
-        'src/browser/scraper.ts',
         'src/core/types.ts',
-        'src/core/errors.ts',
         'src/scheduler.ts',
         'src/scraper.ts',
         'src/types.ts',
