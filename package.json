@@ -21,33 +21,35 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
     "verify:static": "npm run lint && npm run format:check && npm run build",
-    "verify": "npm run verify:static && npm run test:coverage && npm run test:e2e",
+    "verify": "npm run audit:prod && npm run verify:static && npm run test:coverage && npm run test:e2e",
     "prepare": "husky"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "commander": "^14.0.3",
-    "cron-parser": "^5.5.0",
     "diff": "^9.0.0",
-    "nodemailer": "^8.0.7",
+    "ipaddr.js": "^2.4.0",
+    "nodemailer": "^9.0.3",
     "playwright": "^1.51.1",
+    "safe-regex2": "^5.1.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.51.1",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^25.8.0",
-    "@types/nodemailer": "^8.0.0",
-    "@vitest/coverage-v8": "^4.1.6",
+    "@types/node": "^22.20.1",
+    "@types/nodemailer": "^8.0.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.4.0",
     "eslint-plugin-import-x": "^4.8.0",
     "husky": "^9.1.7",
     "prettier": "^3.5.3",
-    "tsx": "^4.22.1",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.26.1",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.10"
   }
 }

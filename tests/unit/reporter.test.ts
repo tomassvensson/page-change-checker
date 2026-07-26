@@ -156,4 +156,71 @@ describe('formatResults', () => {
     expect(report).toContain('Price Label (.value)');
     expect(report).toContain('changed: yes');
   });
+
+  it('omits monitored content and local screenshot paths in summary mode', () => {
+    const report = formatResults(
+      [
+        {
+          url: 'https://example.com/path?token=secret',
+          httpStatus: 200,
+          error: null,
+          loginNeeded: false,
+          screenshotPath: '/private/local/shot.png',
+          loginChecks: [],
+          targets: [
+            {
+              cssPath: '.secret',
+              elementIndex: 0,
+              compareMode: 'innerText',
+              exists: true,
+              matchCount: 1,
+              changed: true,
+              oldContent: 'old secret content',
+              newContent: 'new secret content'
+            }
+          ]
+        }
+      ],
+      { contentMode: 'summary', includeScreenshotPath: false }
+    );
+
+    expect(report).toContain('changed: yes');
+    expect(report).not.toContain('old secret content');
+    expect(report).not.toContain('new secret content');
+    expect(report).not.toContain('/private/local/shot.png');
+    expect(report).not.toContain('token=secret');
+  });
+
+  it('truncates content without generating a full diff', () => {
+    const report = formatResults(
+      [
+        {
+          url: 'https://example.com',
+          httpStatus: 200,
+          error: null,
+          loginNeeded: false,
+          loginChecks: [],
+          targets: [
+            {
+              cssPath: '.value',
+              elementIndex: 0,
+              compareMode: 'innerText',
+              exists: true,
+              matchCount: 1,
+              changed: true,
+              oldContent: '123456',
+              newContent: 'abcdef'
+            }
+          ]
+        }
+      ],
+      { contentMode: 'truncated', maxContentLength: 3 }
+    );
+
+    expect(report).toContain('123… [truncated 3 chars]');
+    expect(report).toContain('abc… [truncated 3 chars]');
+    expect(report).not.toContain(
+      '==================================================================='
+    );
+  });
 });
