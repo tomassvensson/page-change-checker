@@ -1,11 +1,16 @@
+import { endpointLabel } from '../core/redact.js';
 import type { UrlScrapeResult, WebhookConfig } from '../core/types.js';
+
+import {
+  prepareNotificationResults,
+  resolveDeliveryOptions,
+  type ChannelDeliveryOptions
+} from './content.js';
 
 function buildSlackPayload(results: UrlScrapeResult[]): unknown {
   const changed = results.filter((r) => r.targets.some((t) => t.changed === true));
   const lines = changed.map(
-    (r) =>
-      `*${r.url}*: ${r.targets.filter((t) => t.changed).length} selector(s) changed` +
-      (r.screenshotPath ? ` — screenshot: ${r.screenshotPath}` : '')
+    (r) => `*${r.url}*: ${r.targets.filter((t) => t.changed).length} selector(s) changed`
   );
   return {
     text: lines.length > 0 ? lines.join('\n') : 'page-change-checker: no changes detected'
@@ -15,9 +20,7 @@ function buildSlackPayload(results: UrlScrapeResult[]): unknown {
 function buildDiscordPayload(results: UrlScrapeResult[]): unknown {
   const changed = results.filter((r) => r.targets.some((t) => t.changed === true));
   const lines = changed.map(
-    (r) =>
-      `**${r.url}**: ${r.targets.filter((t) => t.changed).length} selector(s) changed` +
-      (r.screenshotPath ? ` — screenshot: ${r.screenshotPath}` : '')
+    (r) => `**${r.url}**: ${r.targets.filter((t) => t.changed).length} selector(s) changed`
   );
   return {
     content: lines.length > 0 ? lines.join('\n') : 'page-change-checker: no changes detected'
@@ -27,9 +30,7 @@ function buildDiscordPayload(results: UrlScrapeResult[]): unknown {
 function buildTeamsPayload(results: UrlScrapeResult[]): unknown {
   const changed = results.filter((r) => r.targets.some((t) => t.changed === true));
   const lines = changed.map(
-    (r) =>
-      `${r.url}: ${r.targets.filter((t) => t.changed).length} selector(s) changed` +
-      (r.screenshotPath ? ` — screenshot: ${r.screenshotPath}` : '')
+    (r) => `${r.url}: ${r.targets.filter((t) => t.changed).length} selector(s) changed`
   );
   return {
     '@type': 'MessageCard',
@@ -54,11 +55,21 @@ function buildPayload(results: UrlScrapeResult[], format: WebhookConfig['format'
 
 export async function sendWebhook(
   results: UrlScrapeResult[],
-  config: WebhookConfig
+  config: WebhookConfig,
+  options: Partial<ChannelDeliveryOptions> = {}
 ): Promise<void> {
   if (!config.enabled) return;
 
-  const body = buildPayload(results, config.format);
+  const delivery = resolveDeliveryOptions(options);
+  await delivery.networkGuard.assertUrlAllowed(config.url);
+  const safeResults = prepareNotificationResults(results, delivery);
+  const body = buildPayload(safeResults, config.format);
+  const bodyLength = Buffer.byteLength(body, 'utf8');
+  if (bodyLength > delivery.maxPayloadLength) {
+    throw new Error(
+      `Webhook payload is ${bodyLength.toString()} bytes; limit is ${delivery.maxPayloadLength.toString()} bytes`
+    );
+  }
 
   const response = await fetch(config.url, {
     method: 'POST',
@@ -66,10 +77,13 @@ export async function sendWebhook(
       'Content-Type': 'application/json',
       ...config.headers
     },
-    body
+    body,
+    signal: AbortSignal.timeout(delivery.timeoutMs)
   });
 
   if (!response.ok) {
-    throw new Error(`Webhook request to ${config.url} failed with status ${response.status}`);
+    throw new Error(
+      `Webhook request to ${endpointLabel(config.url)} failed with status ${response.status}`
+    );
   }
 }

@@ -1,42 +1,77 @@
 import { createTwoFilesPatch } from 'diff';
 
-import type { LoginCheckResult, TargetResult, UrlScrapeResult } from '../core/types.js';
+import { sanitizeMessage, sanitizeTargetUrl, truncateContent } from '../core/redact.js';
+import type {
+  LoginCheckResult,
+  NotificationContentMode,
+  TargetResult,
+  UrlScrapeResult
+} from '../core/types.js';
 
-export function formatResults(results: UrlScrapeResult[]): string {
-  return results.map(formatUrlResult).join('\n\n');
+export interface ReportFormatOptions {
+  contentMode?: NotificationContentMode;
+  maxContentLength?: number;
+  includeScreenshotPath?: boolean;
 }
 
-function formatUrlResult(result: UrlScrapeResult): string {
+const DEFAULT_OPTIONS: Required<ReportFormatOptions> = {
+  contentMode: 'full',
+  maxContentLength: 500,
+  includeScreenshotPath: true
+};
+
+export function formatResults(
+  results: UrlScrapeResult[],
+  options: ReportFormatOptions = {}
+): string {
+  const resolvedOptions = { ...DEFAULT_OPTIONS, ...options };
+  return results.map((result) => formatUrlResult(result, resolvedOptions)).join('\n\n');
+}
+
+function formatUrlResult(result: UrlScrapeResult, options: Required<ReportFormatOptions>): string {
   return [
-    ...formatUrlHeader(result),
-    ...result.loginChecks.flatMap(formatLoginCheck),
-    ...result.targets.flatMap(formatTarget)
+    ...formatUrlHeader(result, options),
+    ...result.loginChecks.flatMap((check) => formatLoginCheck(check, options)),
+    ...result.targets.flatMap((target) => formatTarget(target, options))
   ].join('\n');
 }
 
-function formatUrlHeader(result: UrlScrapeResult): string[] {
+function formatUrlHeader(
+  result: UrlScrapeResult,
+  options: Required<ReportFormatOptions>
+): string[] {
   const tags = result.tags ?? [];
   return [
-    `URL: ${result.url}`,
+    `URL: ${sanitizeTargetUrl(result.url)}`,
     ...(result.dryRun ? ['Mode: dry-run (no state saved)'] : []),
     ...(tags.length > 0 ? [`Tags: ${tags.join(', ')}`] : []),
     `HTTP status: ${result.httpStatus ?? 'unavailable'}`,
     `Login necessary: ${result.loginNeeded ? 'yes' : 'no'}`,
-    ...(result.error ? [`Problem: ${result.error}`] : []),
-    ...(result.screenshotPath ? [`Screenshot: ${result.screenshotPath}`] : [])
+    ...(result.error ? [`Problem: ${sanitizeMessage(result.error)}`] : []),
+    ...(options.includeScreenshotPath && result.screenshotPath
+      ? [`Screenshot: ${result.screenshotPath}`]
+      : [])
   ];
 }
 
-function formatLoginCheck(check: LoginCheckResult): string[] {
+function formatLoginCheck(
+  check: LoginCheckResult,
+  options: Required<ReportFormatOptions>
+): string[] {
+  const includeContent = options.contentMode !== 'summary';
   return [
     `Login check: ${check.cssPath} [${check.elementIndex}] exists=${yesNo(check.exists)} matched=${yesNo(check.matched)}`,
     ...(check.description ? [`  after-login content: ${check.description}`] : []),
-    ...(check.expectedContent ? [`  expected: ${check.expectedContent}`] : []),
-    ...(check.actualContent === null ? [] : [`  actual: ${check.actualContent}`])
+    ...(includeContent && check.expectedContent
+      ? [`  expected: ${formatContent(check.expectedContent, options)}`]
+      : []),
+    ...(includeContent && check.actualContent !== null
+      ? [`  actual: ${formatContent(check.actualContent, options)}`]
+      : [])
   ];
 }
 
-function formatTarget(target: TargetResult): string[] {
+function formatTarget(target: TargetResult, options: Required<ReportFormatOptions>): string[] {
   // Q: use alias when present, fall back to raw CSS path
   const label = target.name ? `${target.name} (${target.cssPath})` : target.cssPath;
   const header = `Selector: ${label} [${target.elementIndex}] mode=${target.compareMode} exists=${yesNo(target.exists)} matches=${target.matchCount}`;
@@ -46,26 +81,50 @@ function formatTarget(target: TargetResult): string[] {
   }
 
   if (target.changed === true) {
-    return [header, ...formatChangedTarget(target)];
+    return [header, ...formatChangedTarget(target, options)];
   }
 
   if (target.changed === false) {
-    return [header, '  changed: no', `  old: ${target.oldContent ?? ''}`];
+    return [
+      header,
+      '  changed: no',
+      ...(options.contentMode === 'summary'
+        ? []
+        : [`  old: ${formatContent(target.oldContent ?? '', options)}`])
+    ];
   }
 
-  return [header, '  changed: baseline created', `  new: ${target.newContent ?? ''}`];
+  return [
+    header,
+    '  changed: baseline created',
+    ...(options.contentMode === 'summary'
+      ? []
+      : [`  new: ${formatContent(target.newContent ?? '', options)}`])
+  ];
 }
 
-function formatChangedTarget(target: TargetResult): string[] {
-  const oldContent = target.oldContent ?? '';
-  const newContent = target.newContent ?? '';
+function formatChangedTarget(
+  target: TargetResult,
+  options: Required<ReportFormatOptions>
+): string[] {
+  if (options.contentMode === 'summary') return ['  changed: yes'];
 
+  const oldContent = formatContent(target.oldContent ?? '', options);
+  const newContent = formatContent(target.newContent ?? '', options);
   return [
     '  changed: yes',
     `  old: ${oldContent}`,
     `  new: ${newContent}`,
-    createTwoFilesPatch('old', 'new', oldContent, newContent).trimEnd()
+    ...(options.contentMode === 'full'
+      ? [createTwoFilesPatch('old', 'new', oldContent, newContent).trimEnd()]
+      : [])
   ];
+}
+
+function formatContent(content: string, options: Required<ReportFormatOptions>): string {
+  return options.contentMode === 'truncated'
+    ? (truncateContent(content, options.maxContentLength) ?? '')
+    : content;
 }
 
 function yesNo(value: boolean): 'yes' | 'no' {

@@ -1,6 +1,8 @@
 import nodemailer from 'nodemailer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Logger } from '../../src/core/logger.js';
+import { NetworkGuard } from '../../src/core/networkPolicy.js';
 import type {
   EmailConfig,
   NotificationsConfig,
@@ -74,6 +76,26 @@ const baseWebhookConfig: WebhookConfig = {
   headers: {}
 };
 
+const deliveryOptions = {
+  contentMode: 'summary' as const,
+  maxContentLength: 50,
+  maxPayloadLength: 10_000,
+  timeoutMs: 1000,
+  networkGuard: new NetworkGuard({ allowPrivateAddresses: true, allowedHosts: [] })
+};
+
+const baseNotifConfig: NotificationsConfig = {
+  onlyChanges: false,
+  contentMode: 'summary',
+  maxContentLength: 50,
+  maxPayloadLength: 10_000,
+  timeoutMs: 1000,
+  failOnError: false,
+  webhooks: []
+};
+
+const permissiveNetwork = { allowPrivateAddresses: true, allowedHosts: [] };
+
 // ---------------------------------------------------------------------------
 // sendEmail
 // ---------------------------------------------------------------------------
@@ -85,13 +107,13 @@ describe('sendEmail', () => {
 
   it('returns early when disabled', async () => {
     const sendMail = makeSendMailMock();
-    await sendEmail([makeResult()], { ...baseEmailConfig, enabled: false });
+    await sendEmail([makeResult()], { ...baseEmailConfig, enabled: false }, deliveryOptions);
     expect(sendMail).not.toHaveBeenCalled();
   });
 
   it('sends mail with formatted body', async () => {
     const sendMail = makeSendMailMock();
-    await sendEmail([makeResult(true)], baseEmailConfig);
+    await sendEmail([makeResult(true)], baseEmailConfig, deliveryOptions);
     expect(nodemailer.createTransport).toHaveBeenCalledWith(
       expect.objectContaining({ host: 'smtp.example.com', port: 587, secure: false })
     );
@@ -105,10 +127,14 @@ describe('sendEmail', () => {
 
   it('passes SMTP auth when configured', async () => {
     const sendMail = makeSendMailMock();
-    await sendEmail([makeResult()], {
-      ...baseEmailConfig,
-      smtp: { ...baseEmailConfig.smtp, auth: { user: 'u', pass: 'p' } }
-    });
+    await sendEmail(
+      [makeResult()],
+      {
+        ...baseEmailConfig,
+        smtp: { ...baseEmailConfig.smtp, auth: { user: 'u', pass: 'p' } }
+      },
+      deliveryOptions
+    );
     expect(nodemailer.createTransport).toHaveBeenCalledWith(
       expect.objectContaining({ auth: { user: 'u', pass: 'p' } })
     );
@@ -117,9 +143,24 @@ describe('sendEmail', () => {
 
   it('sends to multiple recipients joined by comma', async () => {
     const sendMail = makeSendMailMock();
-    await sendEmail([makeResult()], { ...baseEmailConfig, to: ['a@x.com', 'b@x.com'] });
+    await sendEmail(
+      [makeResult()],
+      { ...baseEmailConfig, to: ['a@x.com', 'b@x.com'] },
+      deliveryOptions
+    );
     const call = sendMail.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(call.to).toBe('a@x.com, b@x.com');
+  });
+
+  it('rejects oversized email payloads before creating a transport', async () => {
+    const sendMail = makeSendMailMock();
+    await expect(
+      sendEmail([makeResult(true)], baseEmailConfig, {
+        ...deliveryOptions,
+        maxPayloadLength: 1
+      })
+    ).rejects.toThrow('payload');
+    expect(sendMail).not.toHaveBeenCalled();
   });
 });
 
@@ -134,13 +175,13 @@ describe('sendWebhook', () => {
 
   it('returns early when disabled', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult()], { ...baseWebhookConfig, enabled: false });
+    await sendWebhook([makeResult()], { ...baseWebhookConfig, enabled: false }, deliveryOptions);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('sends generic payload to configured URL', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult(true)], baseWebhookConfig);
+    await sendWebhook([makeResult(true)], baseWebhookConfig, deliveryOptions);
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://hooks.example.com/webhook',
       expect.objectContaining({ method: 'POST' })
@@ -151,38 +192,58 @@ describe('sendWebhook', () => {
 
   it('builds Slack payload', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult(true)], { ...baseWebhookConfig, format: 'slack' });
+    await sendWebhook(
+      [makeResult(true)],
+      { ...baseWebhookConfig, format: 'slack' },
+      deliveryOptions
+    );
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as unknown;
     expect(body).toHaveProperty('text');
   });
 
   it('builds Discord payload', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult(true)], { ...baseWebhookConfig, format: 'discord' });
+    await sendWebhook(
+      [makeResult(true)],
+      { ...baseWebhookConfig, format: 'discord' },
+      deliveryOptions
+    );
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as unknown;
     expect(body).toHaveProperty('content');
   });
 
   it('builds Teams payload', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult(true)], { ...baseWebhookConfig, format: 'teams' });
+    await sendWebhook(
+      [makeResult(true)],
+      { ...baseWebhookConfig, format: 'teams' },
+      deliveryOptions
+    );
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as unknown;
     expect(body).toHaveProperty('@type', 'MessageCard');
   });
 
   it('includes custom headers', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult()], {
-      ...baseWebhookConfig,
-      headers: { 'X-Token': 'secret' }
-    });
+    await sendWebhook(
+      [makeResult()],
+      {
+        ...baseWebhookConfig,
+        headers: { 'X-Token': 'secret' }
+      },
+      deliveryOptions
+    );
     const opts = fetchSpy.mock.calls[0]?.[1] as RequestInit;
     expect((opts.headers as Record<string, string>)['X-Token']).toBe('secret');
   });
 
   it('sends "no changes detected" message when no results changed (Slack)', async () => {
     const fetchSpy = makeFetchMock();
-    await sendWebhook([makeResult(false)], { ...baseWebhookConfig, format: 'slack' });
+    await sendWebhook(
+      [makeResult(false)],
+      { ...baseWebhookConfig, format: 'slack' },
+      deliveryOptions
+    );
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<
       string,
       unknown
@@ -192,29 +253,52 @@ describe('sendWebhook', () => {
 
   it('throws on non-OK response', async () => {
     makeFetchMock(false, 502);
-    await expect(sendWebhook([makeResult()], baseWebhookConfig)).rejects.toThrow('502');
+    await expect(sendWebhook([makeResult()], baseWebhookConfig, deliveryOptions)).rejects.toThrow(
+      '502'
+    );
   });
 
-  it('includes screenshotPath in Discord message when present', async () => {
+  it('does not leak local screenshotPath in Discord messages', async () => {
     const fetchSpy = makeFetchMock();
     const result: UrlScrapeResult = { ...makeResult(true), screenshotPath: '/tmp/shot.png' };
-    await sendWebhook([result], { ...baseWebhookConfig, format: 'discord' });
+    await sendWebhook([result], { ...baseWebhookConfig, format: 'discord' }, deliveryOptions);
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<
       string,
       unknown
     >;
-    expect(body['content']).toContain('/tmp/shot.png');
+    expect(body['content']).not.toContain('/tmp/shot.png');
   });
 
-  it('includes screenshotPath in Teams message when present', async () => {
+  it('does not leak local screenshotPath in Teams messages', async () => {
     const fetchSpy = makeFetchMock();
     const result: UrlScrapeResult = { ...makeResult(true), screenshotPath: '/tmp/shot.png' };
-    await sendWebhook([result], { ...baseWebhookConfig, format: 'teams' });
+    await sendWebhook([result], { ...baseWebhookConfig, format: 'teams' }, deliveryOptions);
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<
       string,
       unknown
     >;
-    expect(body['text']).toContain('/tmp/shot.png');
+    expect(body['text']).not.toContain('/tmp/shot.png');
+  });
+
+  it('minimizes generic webhook content by default', async () => {
+    const fetchSpy = makeFetchMock();
+    await sendWebhook([makeResult(true)], baseWebhookConfig, deliveryOptions);
+    const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as {
+      results: UrlScrapeResult[];
+    };
+    expect(body.results[0]?.targets[0]?.oldContent).toBeNull();
+    expect(body.results[0]?.targets[0]?.newContent).toBeNull();
+  });
+
+  it('rejects oversized webhook payloads before fetch', async () => {
+    const fetchSpy = makeFetchMock();
+    await expect(
+      sendWebhook([makeResult(true)], baseWebhookConfig, {
+        ...deliveryOptions,
+        maxPayloadLength: 1
+      })
+    ).rejects.toThrow('payload');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -229,19 +313,23 @@ describe('sendTelegram', () => {
 
   it('returns early when disabled', async () => {
     const fetchSpy = makeFetchMock();
-    await sendTelegram([makeResult()], { ...baseTelegramConfig, enabled: false });
+    await sendTelegram([makeResult()], { ...baseTelegramConfig, enabled: false }, deliveryOptions);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('returns early when onlyChanges=true and no changes', async () => {
     const fetchSpy = makeFetchMock();
-    await sendTelegram([makeResult(false)], { ...baseTelegramConfig, onlyChanges: true });
+    await sendTelegram(
+      [makeResult(false)],
+      { ...baseTelegramConfig, onlyChanges: true },
+      deliveryOptions
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('sends message when changes present', async () => {
     const fetchSpy = makeFetchMock();
-    await sendTelegram([makeResult(true)], baseTelegramConfig);
+    await sendTelegram([makeResult(true)], baseTelegramConfig, deliveryOptions);
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://api.telegram.org/bottoken123/sendMessage',
       expect.objectContaining({ method: 'POST' })
@@ -256,7 +344,11 @@ describe('sendTelegram', () => {
 
   it('sends "no changes" message when onlyChanges=false and no results changed', async () => {
     const fetchSpy = makeFetchMock();
-    await sendTelegram([makeResult(false)], { ...baseTelegramConfig, onlyChanges: false });
+    await sendTelegram(
+      [makeResult(false)],
+      { ...baseTelegramConfig, onlyChanges: false },
+      deliveryOptions
+    );
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<
       string,
       unknown
@@ -266,18 +358,20 @@ describe('sendTelegram', () => {
 
   it('throws on non-OK response', async () => {
     makeFetchMock(false, 400);
-    await expect(sendTelegram([makeResult(true)], baseTelegramConfig)).rejects.toThrow('400');
+    await expect(
+      sendTelegram([makeResult(true)], baseTelegramConfig, deliveryOptions)
+    ).rejects.toThrow('400');
   });
 
-  it('includes screenshotPath in message when present', async () => {
+  it('does not leak local screenshotPath in Telegram messages', async () => {
     const fetchSpy = makeFetchMock();
     const result: UrlScrapeResult = { ...makeResult(true), screenshotPath: '/tmp/shot.png' };
-    await sendTelegram([result], baseTelegramConfig);
+    await sendTelegram([result], baseTelegramConfig, deliveryOptions);
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<
       string,
       unknown
     >;
-    expect(body['text']).toContain('/tmp/shot.png');
+    expect(body['text']).not.toContain('/tmp/shot.png');
   });
 });
 
@@ -297,24 +391,23 @@ describe('notify', () => {
     vi.restoreAllMocks();
   });
 
-  const baseNotifConfig: NotificationsConfig = {
-    onlyChanges: false,
-    webhooks: []
-  };
-
   it('does nothing when onlyChanges=true and no changes', async () => {
-    await notify([makeResult(false)], { ...baseNotifConfig, onlyChanges: true });
+    await notify(
+      [makeResult(false)],
+      { ...baseNotifConfig, onlyChanges: true },
+      { network: permissiveNetwork }
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('dispatches all enabled channels when changes present', async () => {
     const config: NotificationsConfig = {
-      onlyChanges: false,
+      ...baseNotifConfig,
       email: baseEmailConfig,
       webhooks: [baseWebhookConfig],
       telegram: baseTelegramConfig
     };
-    await notify([makeResult(true)], config);
+    await notify([makeResult(true)], config, { network: permissiveNetwork });
     // fetch called for webhook and telegram
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(nodemailer.createTransport).toHaveBeenCalledOnce();
@@ -322,36 +415,38 @@ describe('notify', () => {
 
   it('skips disabled email', async () => {
     const config: NotificationsConfig = {
-      onlyChanges: false,
+      ...baseNotifConfig,
       email: { ...baseEmailConfig, enabled: false },
       webhooks: []
     };
-    await notify([makeResult(true)], config);
+    await notify([makeResult(true)], config, { network: permissiveNetwork });
     expect(nodemailer.createTransport).not.toHaveBeenCalled();
   });
 
   it('skips disabled webhooks', async () => {
     const config: NotificationsConfig = {
-      onlyChanges: false,
+      ...baseNotifConfig,
       webhooks: [{ ...baseWebhookConfig, enabled: false }]
     };
-    await notify([makeResult(true)], config);
+    await notify([makeResult(true)], config, { network: permissiveNetwork });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('logs error and continues when a channel throws', async () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network fail'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logger = new Logger('test');
+    const logSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 
-    await notify([makeResult(true)], {
-      onlyChanges: false,
-      webhooks: [baseWebhookConfig]
-    });
+    await notify(
+      [makeResult(true)],
+      { ...baseNotifConfig, webhooks: [baseWebhookConfig] },
+      { logger, network: permissiveNetwork }
+    );
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[notify] webhook error'),
-      expect.stringContaining('network fail')
+    expect(logSpy).toHaveBeenCalledWith(
+      'notification delivery failed',
+      expect.objectContaining({ channel: 'webhook', error: 'network fail' })
     );
   });
 
@@ -360,46 +455,68 @@ describe('notify', () => {
     vi.spyOn(nodemailer, 'createTransport').mockReturnValue({
       sendMail: vi.fn().mockRejectedValue(new Error('smtp fail'))
     } as never);
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logger = new Logger('test');
+    const logSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 
-    await notify([makeResult(true)], {
-      onlyChanges: false,
-      email: baseEmailConfig,
-      webhooks: []
-    });
+    await notify(
+      [makeResult(true)],
+      { ...baseNotifConfig, email: baseEmailConfig },
+      { logger, network: permissiveNetwork }
+    );
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[notify] email error'),
-      expect.stringContaining('smtp fail')
+    expect(logSpy).toHaveBeenCalledWith(
+      'notification delivery failed',
+      expect.objectContaining({ channel: 'email', error: 'smtp fail' })
     );
   });
 
   it('logs telegram error and continues', async () => {
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('tg fail'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logger = new Logger('test');
+    const logSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 
-    await notify([makeResult(true)], {
-      onlyChanges: false,
-      webhooks: [],
-      telegram: baseTelegramConfig
-    });
-
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[notify] telegram error'),
-      expect.stringContaining('tg fail')
+    await notify(
+      [makeResult(true)],
+      { ...baseNotifConfig, telegram: baseTelegramConfig },
+      { logger, network: permissiveNetwork }
     );
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'notification delivery failed',
+      expect.objectContaining({ channel: 'telegram', error: 'tg fail' })
+    );
+  });
+
+  it('can fail the run after all channels are attempted', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network fail'));
+    const logger = new Logger('test');
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      notify(
+        [makeResult(true)],
+        {
+          ...baseNotifConfig,
+          failOnError: true,
+          webhooks: [baseWebhookConfig],
+          telegram: baseTelegramConfig
+        },
+        { logger, network: permissiveNetwork }
+      )
+    ).rejects.toThrow('2 notification channel(s) failed');
   });
 
   it('dispatches multiple webhooks in parallel', async () => {
     const config: NotificationsConfig = {
-      onlyChanges: false,
+      ...baseNotifConfig,
       webhooks: [
         { ...baseWebhookConfig, url: 'https://hooks.example.com/1' },
         { ...baseWebhookConfig, url: 'https://hooks.example.com/2' }
       ]
     };
-    await notify([makeResult(true)], config);
+    await notify([makeResult(true)], config, { network: permissiveNetwork });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
