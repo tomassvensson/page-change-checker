@@ -1,138 +1,111 @@
 # Architecture
 
-## Module diagram
+## Runtime components
 
 ```mermaid
 flowchart TD
-    subgraph cli["CLI layer  (src/cli/)"]
-        INDEX[index.ts\nCommander commands:\nseed / run / schedule]
-        CONFIG[config.ts\nZod schema\n+ loadConfig / parseConfig]
-        SCHEDULER[scheduler.ts\nInterval loop\n+ overlap prevention]
-    end
-
-    subgraph browser["Browser layer  (src/browser/)"]
-        SCRAPER[scraper.ts\nPlaywright orchestration\nRetry · Concurrency · Rate limit]
-        READER[pageReader.ts\nDOM extraction\nwaitForSelector support]
-    end
-
-    subgraph storage["Storage layer  (src/storage/)"]
-        DB[db.ts\nSQLite helpers\nmigrate · seed · resolveUrls]
-    end
-
-    subgraph reporting["Reporting layer  (src/reporting/)"]
-        REPORTER[reporter.ts\nDiff formatting\nSelector aliases · Tags]
-    end
-
-    subgraph core["Core  (src/core/)"]
-        TYPES[types.ts\nShared interfaces]
-        ERRORS[errors.ts\nStructured error hierarchy]
-        NORMALIZE[normalize.ts\nText normalisation\n+ ignore-pattern stripping]
-    end
-
-    INDEX --> CONFIG
-    INDEX --> DB
-    INDEX --> SCRAPER
-    INDEX --> REPORTER
-    INDEX --> SCHEDULER
-
-    SCRAPER --> READER
-    SCRAPER --> NORMALIZE
-    SCRAPER --> ERRORS
-
-    DB --> NORMALIZE
-    DB --> TYPES
-
-    READER --> TYPES
-
-    REPORTER --> TYPES
-
-    CONFIG --> TYPES
+    CLI["CLI / scheduler"] --> CONFIG["Strict Zod config\n+ exact env references"]
+    CLI --> LOCK["Cross-process DB lock"]
+    LOCK --> DB["SQLite\nmigrations + consistent backup"]
+    CONFIG --> SCRAPER["Scrape orchestrator"]
+    SCRAPER --> PROFILE["Persistent context per origin"]
+    PROFILE --> GUARD["Outbound network guard"]
+    GUARD --> AUTH{"Login checks pass?"}
+    AUTH -->|no| AUTHSTATE["Commit status/login checks only"]
+    AUTH -->|yes| READ["Read and validate all targets in memory"]
+    READ --> ATOMIC["Atomic observation transaction"]
+    AUTHSTATE --> REPORT["Report"]
+    ATOMIC --> REPORT
+    REPORT --> NOTIFY["Minimized, timed notification delivery"]
 ```
 
-## Data flow on each `run`
+The application is deliberately a local CLI. It exposes no HTTP server and has
+no multi-user authentication database. Its primary security boundary is between
+trusted operator configuration and untrusted monitored pages/endpoints.
 
-```
-config.json
-    │
-    ▼
-loadConfig()          Validate with Zod; apply defaults
-    │
-    ▼
-openDatabase()        Open SQLite; run additive migrations
-    │
-    ▼
-resolveUrls()         Merge DB state with config overrides
-    │                 (enabled flags, tags, normalise, ignorePatterns, viewport)
-    ▼
-scrapeAll()
-  ├─ Group URLs by hostname
-  ├─ Acquire global semaphore (concurrency.global)
-  ├─ Acquire per-host semaphore (concurrency.perHost)
-  ├─ jitteredDelay()           Random pause between requests (rate limiting)
-  └─ scrapeWithRetry()
-       ├─ Launch Playwright persistent context
-       ├─ Set viewport (global or per-URL override)
-       ├─ navigate()
-       ├─ cookieConsent()      Auto-click accept buttons
-       ├─ loginCheck()         Detect login walls
-       ├─ for each selector:
-       │    readElementContent()    DOM extraction (+ waitForSelector)
-       │    processContent()        Strip ignorePatterns, then normalise
-       │    compare vs. snapshot    Detect change
-       │    updateTargetContent()   Write new snapshot to SQLite
-       └─ UrlScrapeResult[]
-    │
-    ▼
-formatResults()       Render unified diffs to stdout
-```
+## Observation lifecycle
 
-## Error hierarchy
+1. The CLI acquires an exclusive stale-aware lock next to the configured
+   database. A second process fails fast instead of racing SQLite and browser
+   profile state.
+2. Config is parsed with strict schemas. Only HTTP(S) URLs are accepted;
+   embedded credentials, unknown fields, duplicates, invalid/unsafe regexes,
+   header injection, and inconsistent interactive-login settings are rejected.
+3. Config is authoritative: removed URLs and selectors are disabled, and stale
+   login checks are removed.
+4. URLs are grouped by origin. Each origin gets its own persistent Chromium
+   context and profile directory.
+5. Global and per-origin concurrency limits are enforced. Start times for the
+   same origin are jittered by the configured rate limit.
+6. Every navigation, redirect, and subresource passes through `NetworkGuard`.
+   Private/reserved destinations are blocked unless explicitly permitted.
+   Custom browser headers are merged only for the exact target origin.
+7. HTTP status is checked before DOM extraction. Login checks run before
+   watched selectors; a logged-out page cannot update target snapshots.
+8. All watched selectors are evaluated in memory. Missing/malformed selectors,
+   network-policy violations, and oversized content invalidate the observation.
+9. URL status, login-check state, and every target snapshot are written in one
+   transaction. Row-count assertions turn stale IDs into rollback-triggering
+   failures.
+10. Reports go to stdout; structured, redacted logs go to stderr. Third-party
+    notifications default to summary-only content and omit local paths.
+11. `SIGINT`/`SIGTERM` abort pending waits, close browser contexts, wait for the
+    active run, close SQLite, and release the process lock.
 
-```
-PageChangeCheckerError (base)
-├─ NavigationTimeoutError   — page.goto() timed out
-├─ HttpError                — HTTP 4xx / 5xx response (.status)
-├─ SelectorMissingError     — waitForSelector or required element not found
-├─ LoginMissingError        — login check selector absent after page load
-└─ ComparisonError          — unexpected error during snapshot comparison
-```
+## Storage and migrations
 
-`classifyError(error)` maps any thrown error to the `ErrorType` enum for structured
-reporting.
-
-## Persistence model
-
-```
+```text
 urls
-  id        INTEGER PRIMARY KEY
-  url       TEXT UNIQUE
-  tags      TEXT (JSON array, nullable)
-  enabled   INTEGER NOT NULL DEFAULT 1
-  status    TEXT
-  lastChecked TEXT
+  id, url (unique), enabled, last_http_status, last_checked_at, tags
 
 watch_targets
-  id              INTEGER PRIMARY KEY
-  url_id          INTEGER → urls.id
-  css_path        TEXT
-  element_index   INTEGER
-  compare_mode    TEXT
-  name            TEXT (nullable)
-  enabled         INTEGER NOT NULL DEFAULT 1
-  last_content    TEXT
-  last_changed    TEXT
+  id, url_id -> urls.id, name, css_path, element_index,
+  compare_mode, last_content, enabled
 
 login_checks
-  id              INTEGER PRIMARY KEY
-  url_id          INTEGER → urls.id
-  css_path        TEXT
-  element_index   INTEGER
-  compare_mode    TEXT
-  expected_content TEXT (nullable)
-  description     TEXT (nullable)
-  last_result     TEXT
-  last_checked    TEXT
+  id, url_id -> urls.id, css_path, element_index, compare_mode,
+  expected_content, description, last_seen_content, last_matched
+
+schema_migrations
+  version, applied_at
 ```
 
-New columns are added with `addColumnIfMissing()` so existing databases are
-migrated non-destructively.
+SQLite uses foreign keys and WAL mode. Before a migration changes an existing
+application schema, `VACUUM INTO` creates a transactionally consistent backup
+that includes committed WAL state. The backup is reopened read-only and checked
+with `PRAGMA integrity_check` before migration proceeds. All migration DDL and
+version recording then execute in one transaction.
+
+## Error and retry model
+
+`PageChangeCheckerError` carries a machine-readable `errorType`:
+
+```text
+navigation_timeout
+http_error
+selector_missing
+login_missing
+network_policy
+comparison_error
+unknown
+```
+
+Retry decisions are typed rather than based only on message text. HTTP 408,
+429, and 5xx responses, navigation timeouts, and unknown transient browser
+failures may retry with capped exponential backoff. Login, selector,
+network-policy, comparison, and other permanent failures do not.
+
+## Verification strategy
+
+- Unit tests cover strict config parsing, network ranges (including
+  IPv4-mapped IPv6), redaction, locks, retries, reporting, scheduling, and
+  notification minimization.
+- SQLite integration tests prove WAL-consistent backups, authoritative
+  reconciliation, row-count validation, and transaction rollback.
+- A shared real-Chromium scenario suite runs under both Vitest/V8 coverage and
+  Playwright. It proves that logged-out pages, HTTP 500 pages, malformed later
+  selectors, and oversized content preserve baselines, and that
+  `Authorization` never crosses origin.
+- CI additionally runs a production dependency audit, immutable third-party
+  action revisions, CodeQL, SonarCloud (when configured), and a non-root Docker
+  smoke test.
