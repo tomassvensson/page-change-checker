@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { redactFields } from './redact.js';
+
 // ---------------------------------------------------------------------------
 // Log levels (X)
 // ---------------------------------------------------------------------------
@@ -46,7 +48,9 @@ function emit(
 ): void {
   if (LEVEL_RANK[level] < LEVEL_RANK[_globalLevel]) return;
 
-  const out = level === 'error' || level === 'warn' ? process.stderr : process.stdout;
+  // Keep stdout reserved for reports / JSON output so logs never corrupt machine-readable output.
+  const out = process.stderr;
+  const safeFields = fields === undefined ? undefined : redactFields(fields);
 
   if (useJsonFormat()) {
     const entry: Record<string, unknown> = {
@@ -54,13 +58,15 @@ function emit(
       level,
       msg,
       ...(runId !== undefined ? { runId } : {}),
-      ...fields
+      ...safeFields
     };
     out.write(JSON.stringify(entry) + '\n');
   } else {
     const runPart = runId !== undefined ? ` [${runId}]` : '';
     const fieldPart =
-      fields !== undefined && Object.keys(fields).length > 0 ? ' ' + JSON.stringify(fields) : '';
+      safeFields !== undefined && Object.keys(safeFields).length > 0
+        ? ' ' + JSON.stringify(safeFields)
+        : '';
     out.write(`[${level.toUpperCase()}]${runPart} ${msg}${fieldPart}\n`);
   }
 }

@@ -5,6 +5,7 @@ export type ErrorType =
   | 'http_error'
   | 'selector_missing'
   | 'login_missing'
+  | 'network_policy'
   | 'comparison_error'
   | 'unknown';
 
@@ -26,6 +27,8 @@ export interface RetryConfig {
   baseDelayMs: number;
   /** Exponential multiplier applied to baseDelayMs on each subsequent retry. */
   backoffFactor: number;
+  /** Upper bound for exponential retry delays. */
+  maxDelayMs: number;
 }
 
 export interface ConcurrencyConfig {
@@ -42,6 +45,16 @@ export interface RateLimitConfig {
   maxDelayMs: number;
 }
 
+export interface NetworkPolicyConfig {
+  /** Permit loopback, link-local, private, and otherwise non-public IP addresses. */
+  allowPrivateAddresses: boolean;
+  /**
+   * Explicit host allowlist. Supports exact names and `*.example.com` wildcard suffixes.
+   * Allowlisted hosts bypass private-address blocking.
+   */
+  allowedHosts: string[];
+}
+
 // ---- Per-URL browser overrides (Z) ----
 
 export interface ViewportConfig {
@@ -52,15 +65,6 @@ export interface ViewportConfig {
 export interface UrlOverridesConfig {
   /** Override the global viewport for this URL. Applied per-page via page.setViewportSize(). */
   viewport?: ViewportConfig;
-  /**
-   * Override the user-agent for this URL. Note: requires a dedicated browser context,
-   * so this is recorded for documentation purposes; the global user-agent is used in practice.
-   */
-  userAgent?: string;
-  /** Same note as userAgent — locale is a context-level Playwright setting. */
-  locale?: string;
-  /** Same note as userAgent — timezoneId is a context-level Playwright setting. */
-  timezoneId?: string;
 }
 
 // ---- Browser config ----
@@ -69,6 +73,8 @@ export interface BrowserConfig {
   headless: boolean;
   userDataDir: string;
   timeoutMs: number;
+  /** Maximum extracted content size per selector before the observation is rejected. */
+  maxContentLength: number;
   waitUntil: 'load' | 'domcontentloaded' | 'networkidle' | 'commit';
   userAgent: string;
   locale: string;
@@ -177,6 +183,8 @@ export interface WebhookConfig {
   headers: Record<string, string>;
 }
 
+export type NotificationContentMode = 'summary' | 'truncated' | 'full';
+
 export interface EmailConfig {
   enabled: boolean;
   from: string;
@@ -201,6 +209,16 @@ export interface TelegramConfig {
 export interface NotificationsConfig {
   /** When true (default), only dispatch notifications when at least one change was detected. */
   onlyChanges: boolean;
+  /** Controls whether monitored content is omitted, truncated, or included in notifications. */
+  contentMode: NotificationContentMode;
+  /** Maximum content length per field when contentMode is `truncated`. */
+  maxContentLength: number;
+  /** Maximum serialized body size sent to a single third-party channel. */
+  maxPayloadLength: number;
+  /** Network timeout used by webhook, Telegram, and SMTP delivery. */
+  timeoutMs: number;
+  /** Throw after dispatch when any channel fails instead of logging best-effort failures. */
+  failOnError: boolean;
   email?: EmailConfig;
   webhooks: WebhookConfig[];
   telegram?: TelegramConfig;
@@ -208,6 +226,7 @@ export interface NotificationsConfig {
 
 export interface AppConfig {
   databasePath: string;
+  network: NetworkPolicyConfig;
   browser: BrowserConfig;
   schedule: { intervalHours: number };
   login: LoginConfig;
