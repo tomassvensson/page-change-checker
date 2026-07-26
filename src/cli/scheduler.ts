@@ -1,3 +1,4 @@
+import { log } from '../core/logger.js';
 import type { AppConfig } from '../core/types.js';
 
 /**
@@ -5,29 +6,53 @@ import type { AppConfig } from '../core/types.js';
  * Overlapping runs are prevented: if a run is still in progress when the next
  * interval fires, that tick is skipped and a warning is printed. (W)
  */
-export async function runForever(config: AppConfig, task: () => Promise<void>): Promise<void> {
+export async function runForever(
+  config: AppConfig,
+  task: (signal: AbortSignal) => Promise<void>,
+  signal: AbortSignal = new AbortController().signal
+): Promise<void> {
   const intervalMs = config.schedule.intervalHours * 60 * 60 * 1000;
+  let activeRun: Promise<void> | null = null;
 
-  await task();
-
-  let running = false;
-
-  setInterval(() => {
-    if (running) {
-      console.warn(
-        `[scheduler] Previous run is still in progress — skipping this tick ` +
-          `(interval: ${config.schedule.intervalHours}h).`
-      );
-      return;
+  const startRun = (): Promise<void> | null => {
+    if (activeRun !== null) {
+      log.warn('previous run is still in progress; skipping scheduler tick', {
+        intervalHours: config.schedule.intervalHours
+      });
+      return null;
     }
 
-    running = true;
-    task()
+    activeRun = task(signal)
       .catch((error: unknown) => {
-        console.error('[scheduler] Run failed:', error instanceof Error ? error.stack : error);
+        if (!signal.aborted) {
+          log.error('scheduled run failed', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
       })
       .finally(() => {
-        running = false;
+        activeRun = null;
       });
-  }, intervalMs);
+    return activeRun;
+  };
+
+  const initialRun = startRun();
+  if (initialRun) await initialRun;
+  if (signal.aborted) return;
+
+  await new Promise<void>((resolveStopped) => {
+    const timer = setInterval(() => {
+      void startRun();
+    }, intervalMs);
+    const stop = (): void => {
+      clearInterval(timer);
+      const pending = activeRun;
+      if (pending === null) {
+        resolveStopped();
+      } else {
+        void pending.finally(resolveStopped);
+      }
+    };
+    signal.addEventListener('abort', stop, { once: true });
+  });
 }

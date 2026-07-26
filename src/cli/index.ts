@@ -1,9 +1,10 @@
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { Command } from 'commander';
 
 import { scrapeAll } from '../browser/scraper.js';
+import { acquireFileLock } from '../core/fileLock.js';
+import { createRunLogger, log } from '../core/logger.js';
 import type { LoadedUrl } from '../core/types.js';
 import { notify } from '../notifications/index.js';
 import { formatResults } from '../reporting/reporter.js';
@@ -15,10 +16,10 @@ import { runForever } from './scheduler.js';
 // ---------------------------------------------------------------------------
 // Version — read from package.json at runtime so it stays in sync.
 // ---------------------------------------------------------------------------
-const _require = createRequire(import.meta.url);
-const { version } = _require('../../package.json') as { version: string };
+const version = readPackageVersion();
 
 const program = new Command();
+const shutdownController = new AbortController();
 
 program
   .name('page-change-checker')
@@ -30,9 +31,17 @@ program
   .description('Create or update database rows from the config file')
   .action(async () => {
     const config = await loadConfig(program.opts<{ config: string }>().config);
-    const db = openDatabase(config.databasePath);
-    seedFromConfig(db, config);
-    db.close();
+    const lock = acquireFileLock(config.databasePath);
+    try {
+      const db = openDatabase(config.databasePath);
+      try {
+        seedFromConfig(db, config);
+      } finally {
+        db.close();
+      }
+    } finally {
+      lock.release();
+    }
   });
 
 program
@@ -67,7 +76,11 @@ program
     if (opts.once) {
       await runOnce(configPath, { url: opts.url, tag: opts.tag });
     } else {
-      await runForever(config, async () => runOnce(configPath, { url: opts.url, tag: opts.tag }));
+      await runForever(
+        config,
+        async (signal) => runOnce(configPath, { url: opts.url, tag: opts.tag }, signal),
+        shutdownController.signal
+      );
     }
   });
 
@@ -112,7 +125,25 @@ interface RunOptions {
   json?: boolean;
 }
 
-async function runOnce(configPath: string, opts: RunOptions = {}): Promise<void> {
+function readPackageVersion(): string {
+  for (const relativePath of ['../../package.json', '../../../package.json']) {
+    try {
+      const packageJson = JSON.parse(
+        readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+      ) as { version?: unknown };
+      if (typeof packageJson.version === 'string') return packageJson.version;
+    } catch {
+      // Source and compiled layouts have different depths; try the next one.
+    }
+  }
+  throw new Error('Could not locate package.json to determine the CLI version');
+}
+
+async function runOnce(
+  configPath: string,
+  opts: RunOptions = {},
+  signal: AbortSignal = shutdownController.signal
+): Promise<void> {
   if (!existsSync(configPath)) {
     throw new Error(
       `Missing config file: ${configPath}. Copy config.example.json to config.json first.`
@@ -120,24 +151,37 @@ async function runOnce(configPath: string, opts: RunOptions = {}): Promise<void>
   }
 
   const config = await loadConfig(configPath);
-  const db = openDatabase(config.databasePath);
+  signal.throwIfAborted();
+  const logger = createRunLogger();
+  const lock = acquireFileLock(config.databasePath);
   try {
-    if (!opts.dryRun) {
-      seedFromConfig(db, config);
-    }
-    let urls = resolveUrls(db, config);
-    urls = applyUrlFilters(urls, opts);
-    const results = await scrapeAll(db, config, urls, { dryRun: opts.dryRun });
-    if (opts.json) {
-      console.log(JSON.stringify(results, null, 2));
-    } else {
-      console.log(formatResults(results));
-    }
-    if (!opts.dryRun && config.notifications) {
-      await notify(results, config.notifications);
+    const db = openDatabase(config.databasePath);
+    try {
+      if (!opts.dryRun) {
+        seedFromConfig(db, config);
+      }
+      let urls = resolveUrls(db, config, {
+        includeUnseeded: opts.dryRun
+      });
+      urls = applyUrlFilters(urls, opts);
+      const results = await scrapeAll(db, config, urls, {
+        dryRun: opts.dryRun,
+        logger,
+        signal
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(results, null, 2));
+      } else {
+        console.log(formatResults(results));
+      }
+      if (!opts.dryRun && config.notifications) {
+        await notify(results, config.notifications, { logger, network: config.network });
+      }
+    } finally {
+      db.close();
     }
   } finally {
-    db.close();
+    lock.release();
   }
 }
 
@@ -177,16 +221,21 @@ let shuttingDown = false;
 function handleShutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  process.stderr.write(
-    `\n[cli] received ${signal} — waiting for in-flight operations to finish…\n`
-  );
-  // setInterval is cleared automatically when the process exits; we just let
-  // the event loop drain so any active awaits (DB writes, page.close()) can
-  // complete before Node exits with code 0.
+  log.info('shutdown requested; cancelling active work', { signal });
+  shutdownController.abort(new Error(`Received ${signal}`));
   process.exitCode = 0;
 }
 
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 
-await program.parseAsync();
+try {
+  await program.parseAsync();
+} catch (error) {
+  if (!shutdownController.signal.aborted) {
+    log.error('command failed', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    process.exitCode = 1;
+  }
+}
