@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 – Build
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS build
+FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS build
 
 WORKDIR /app
 
@@ -19,17 +19,20 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2 – Runtime
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm AS runtime
+FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS runtime
 
 WORKDIR /app
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/home/node \
+    XDG_CACHE_HOME=/home/node/.cache \
+    XDG_CONFIG_HOME=/home/node/.config
 
 # Copy the fully-compiled node_modules from the build stage and prune dev
 # dependencies in-place. This avoids recompiling native modules (e.g.
 # better-sqlite3) inside a minimal runtime image that has no build tools.
-COPY package*.json ./
-COPY --from=build /app/node_modules ./node_modules
+COPY --chown=node:node package*.json ./
+COPY --chown=node:node --from=build /app/node_modules ./node_modules
 
 # Install Chromium system dependencies for Debian 12 (bookworm).
 # We install these explicitly instead of using `playwright install --with-deps`
@@ -61,16 +64,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Download the Chromium binary while the Playwright CLI is still present, then
 # prune dev dependencies for the final runtime image.
-RUN ./node_modules/.bin/playwright install chromium \
+RUN ./node_modules/.bin/playwright install chromium --only-shell \
     && npm prune --omit=dev
 
 # Copy compiled output from the build stage
-COPY --from=build /app/dist ./dist
+COPY --chown=node:node --from=build /app/dist ./dist
 
-# Persistent data lives in a mounted volume at /app/data
-VOLUME ["/app/data"]
+RUN mkdir -p /app/data /app/screenshots /home/node/.cache /home/node/.config \
+    && chown -R node:node /app/data /app/screenshots /home/node
 
 ENV NODE_ENV=production
+
+USER node
 
 ENTRYPOINT ["node", "dist/src/cli/index.js"]
 CMD ["schedule"]
