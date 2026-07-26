@@ -20,7 +20,10 @@ describe('parseConfig', () => {
     expect(config.databasePath).toBe('data/page-change-checker.sqlite');
     expect(config.browser.headless).toBe(true);
     expect(config.browser.userAgent).toContain('Chrome/');
-    expect(config.browser.cookieConsent.enabled).toBe(true);
+    expect(config.browser.cookieConsent.enabled).toBe(false);
+    expect(config.browser.maxContentLength).toBe(2_000_000);
+    expect(config.login.interactive).toBe(false);
+    expect(config.network).toEqual({ allowPrivateAddresses: false, allowedHosts: [] });
     expect(config.schedule.intervalHours).toBe(24);
     expect(config.urls[0]?.selectors[0]).toMatchObject({
       cssPath: '.price',
@@ -35,6 +38,36 @@ describe('parseConfig', () => {
         urls: [{ url: 'not a url', selectors: [{ cssPath: '.price' }] }]
       })
     ).toThrow();
+  });
+
+  it('resolves exact environment references without interpolating surrounding text', () => {
+    process.env['PCC_TEST_TOKEN'] = 'secret-value';
+    try {
+      const config = parseConfig({
+        browser: {
+          extraHTTPHeaders: {
+            Authorization: '${PCC_TEST_TOKEN}',
+            'X-Literal': 'prefix-${PCC_TEST_TOKEN}'
+          }
+        },
+        urls: [{ url: 'https://example.com', selectors: [{ cssPath: '.price' }] }]
+      });
+
+      expect(config.browser.extraHTTPHeaders['Authorization']).toBe('secret-value');
+      expect(config.browser.extraHTTPHeaders['X-Literal']).toBe('prefix-${PCC_TEST_TOKEN}');
+    } finally {
+      delete process.env['PCC_TEST_TOKEN'];
+    }
+  });
+
+  it('fails closed when a referenced environment variable is missing', () => {
+    delete process.env['PCC_DEFINITELY_MISSING'];
+    expect(() =>
+      parseConfig({
+        browser: { extraHTTPHeaders: { Authorization: '${PCC_DEFINITELY_MISSING}' } },
+        urls: [{ url: 'https://example.com', selectors: [{ cssPath: '.price' }] }]
+      })
+    ).toThrow('Missing environment variable PCC_DEFINITELY_MISSING');
   });
 });
 
