@@ -4,6 +4,11 @@ coverage/
 playwright-report/
 test-results/
 config.json
-data/*.sqlite
-data/user-data/
+data/
+screenshots/
+*.sqlite
+*.sqlite-*
+*.sqlite.backup.*
+*.lock
+*.log
 .env

@@ -2,11 +2,17 @@
 node_modules
 dist
 coverage
+playwright-report
 test-results
 data
+screenshots
+config.json
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite.backup.*
+*.lock
+*.log
 .env
 .env.*
