@@ -14,6 +14,7 @@ import { maskSignature } from './visual.js';
 export interface CaptureOptions {
   navigate: () => Promise<number | null>;
   authenticate: (url: string, text: string) => string | null;
+  authenticatedSelector?: string;
   title?: (title: string) => string;
   timeoutMs?: number;
   preScreenshotWaitMs?: number;
@@ -40,6 +41,16 @@ async function validate(page: Page, status: number | null, options: CaptureOptio
   const title = options.title?.(await page.title()) ?? (await page.title());
   const error = options.authenticate(page.url(), text) ?? pageValidity({ title, text });
   if (error) throw new Error(error);
+  if (options.authenticatedSelector) {
+    try {
+      await page
+        .locator(options.authenticatedSelector)
+        .first()
+        .waitFor({ state: 'visible', timeout: options.timeoutMs ?? 30000 });
+    } catch {
+      throw new Error('Required authenticated content was not found; evidence not compared');
+    }
+  }
 }
 
 /** Image readiness is independent of the optional extra wait. Every reload is
