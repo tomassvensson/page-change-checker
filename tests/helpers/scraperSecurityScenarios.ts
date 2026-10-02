@@ -234,7 +234,7 @@ interface RunOverrides {
   extraHTTPHeaders?: Record<string, string>;
 }
 
-function prepareRun(
+export function prepareRun(
   url: string,
   overrides: RunOverrides
 ): {
@@ -285,7 +285,7 @@ function prepareRun(
   return { config, db };
 }
 
-function selector(cssPath: string, initialLastContent: string): SelectorConfig {
+export function selector(cssPath: string, initialLastContent: string): SelectorConfig {
   return {
     cssPath,
     elementIndex: 0,
@@ -295,7 +295,7 @@ function selector(cssPath: string, initialLastContent: string): SelectorConfig {
   };
 }
 
-function loginCheck(cssPath: string, expectedContent: string): LoginCheckConfig {
+export function loginCheck(cssPath: string, expectedContent: string): LoginCheckConfig {
   return {
     cssPath,
     elementIndex: 0,
@@ -305,7 +305,7 @@ function loginCheck(cssPath: string, expectedContent: string): LoginCheckConfig 
   };
 }
 
-function html(response: ServerResponse, body: string): void {
+export function html(response: ServerResponse, body: string): void {
   response.writeHead(200, { 'content-type': 'text/html' });
   response.end(`<!doctype html><html><body>${body}</body></html>`);
 }
@@ -315,7 +315,7 @@ interface RunningServer {
   close(): Promise<void>;
 }
 
-function startServer(
+export function startServer(
   handler: (request: IncomingMessage, response: ServerResponse) => void
 ): Promise<RunningServer> {
   const server = createServer(handler);

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync
 } from 'node:fs';
@@ -63,6 +64,13 @@ export function acquireFileLock(resourcePath: string): FileLock {
     } catch (error) {
       if (!isAlreadyExists(error)) throw error;
       const ownerPid = readLockMetadata(lockPath)?.pid ?? null;
+      // A competing owner may have created the file but not written metadata
+      // yet. Never remove a freshly created, incomplete lock.
+      if (ownerPid === null && Date.now() - statSync(lockPath).mtimeMs < 5000) {
+        throw new Error(`Process lock is being initialized for ${resolve(resourcePath)}`, {
+          cause: error
+        });
+      }
       if (ownerPid !== null && isProcessAlive(ownerPid)) {
         throw new Error(
           `Another page-change-checker process (PID ${ownerPid.toString()}) is using ${resolve(resourcePath)}`,
