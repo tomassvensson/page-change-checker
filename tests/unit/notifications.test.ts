@@ -44,7 +44,7 @@ function makeResult(changed = false): UrlScrapeResult {
 
 function makeSendMailMock() {
   const sendMail = vi.fn().mockResolvedValue({ messageId: 'test-id' });
-  vi.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+  vi.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail, close: vi.fn() } as never);
   return sendMail;
 }
 
@@ -453,7 +453,8 @@ describe('notify', () => {
   it('logs email error and continues', async () => {
     vi.restoreAllMocks();
     vi.spyOn(nodemailer, 'createTransport').mockReturnValue({
-      sendMail: vi.fn().mockRejectedValue(new Error('smtp fail'))
+      sendMail: vi.fn().mockRejectedValue(new Error('smtp fail')),
+      close: vi.fn()
     } as never);
     const logger = new Logger('test');
     const logSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);

@@ -31,7 +31,7 @@
     "commander": "^14.0.3",
     "diff": "^9.0.0",
     "ipaddr.js": "^2.4.0",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.13",
     "playwright": "^1.51.1",
     "safe-regex2": "^5.1.1",
     "zod": "^4.4.3"
