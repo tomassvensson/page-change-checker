@@ -114,6 +114,7 @@ export class MonitorJournal {
         attempts: 'INTEGER NOT NULL DEFAULT 0',
         failure_class: 'TEXT',
         daily_date: 'TEXT',
+        recipient: 'TEXT',
         cutoff: 'TEXT'
       };
       for (const [name, sql] of Object.entries(additions)) {
@@ -123,6 +124,10 @@ export class MonitorJournal {
       if (!columns.some((column) => column.name === 'daily_date'))
         this.db.exec(`UPDATE monitor_outbox
         SET daily_date=json_extract(payload,'$.dailyDate'),cutoff=json_extract(payload,'$.cutoff') WHERE json_valid(payload)`);
+      if (!columns.some((column) => column.name === 'recipient'))
+        this.db.exec(
+          "UPDATE monitor_outbox SET recipient=json_extract(payload,'$.recipient') WHERE json_valid(payload)"
+        );
       this.db
         .exec(`CREATE INDEX IF NOT EXISTS outbox_due ON monitor_outbox(state,next_attempt,created);
         PRAGMA user_version = 2;`);
@@ -273,13 +278,38 @@ export class MonitorJournal {
     ).map((row) => JSON.parse(row.record) as CheckRecord);
   }
 
+  /** Period evidence plus the last attempt and validated success of each target.
+   * Older success must not become "never" merely because it predates the digest.
+   * Ranking reads compact indexed columns, not every historical JSON payload. */
+  reportChecks(since: string, until: string): CheckRecord[] {
+    const rows = this.db
+      .prepare(
+        `WITH eligible AS (
+      SELECT id,target,ended,validated FROM monitor_checks WHERE ended<?
+    ), recent AS (
+      SELECT id FROM eligible WHERE ended>=?
+      UNION SELECT id FROM (SELECT id,row_number() OVER(PARTITION BY target ORDER BY ended DESC,id DESC) AS rank FROM eligible) WHERE rank=1
+      UNION SELECT id FROM (SELECT id,row_number() OVER(PARTITION BY target ORDER BY ended DESC,id DESC) AS rank FROM eligible WHERE validated=1) WHERE rank=1
+    ) SELECT record FROM monitor_checks WHERE id IN (SELECT id FROM recent) ORDER BY ended,id`
+      )
+      .all(until, since) as { record: string }[];
+    return rows.map((row) => JSON.parse(row.record) as CheckRecord);
+  }
+
   enqueue(id: string, payload: unknown, now = new Date().toISOString()): void {
-    const meta = payload as { dailyDate?: string; cutoff?: string } | null;
+    const meta = payload as { dailyDate?: string; cutoff?: string; recipient?: string } | null;
     this.db
       .prepare(
-        'INSERT OR IGNORE INTO monitor_outbox(id,created,payload,daily_date,cutoff) VALUES(?,?,?,?,?)'
+        'INSERT OR IGNORE INTO monitor_outbox(id,created,payload,daily_date,cutoff,recipient) VALUES(?,?,?,?,?,?)'
       )
-      .run(id, now, JSON.stringify(payload), meta?.dailyDate ?? null, meta?.cutoff ?? null);
+      .run(
+        id,
+        now,
+        JSON.stringify(payload),
+        meta?.dailyDate ?? null,
+        meta?.cutoff ?? null,
+        meta?.recipient ?? null
+      );
   }
 
   hasMail(id: string): boolean {
@@ -338,11 +368,20 @@ export class MonitorJournal {
     }));
   }
 
-  latestDailyDelivery(): { dailyDate: string; cutoff: string | null } | null {
+  latestDailyDelivery(recipients?: string[]): { dailyDate: string; cutoff: string | null } | null {
+    if (recipients?.length) {
+      const row = this.db
+        .prepare(
+          `SELECT daily_date,CASE WHEN count(DISTINCT recipient)>=? THEN min(CASE WHEN recipient IS NOT NULL THEN cutoff END) ELSE max(cutoff) END AS cutoff FROM (SELECT daily_date,recipient,max(cutoff) AS cutoff FROM monitor_outbox WHERE delivered IS NOT NULL AND daily_date IS NOT NULL AND (recipient IN (${recipients.map(() => '?').join(',')}) OR recipient IS NULL) GROUP BY daily_date,recipient) GROUP BY daily_date HAVING count(DISTINCT recipient)>=? OR (count(DISTINCT recipient)=0 AND ?=1) ORDER BY daily_date DESC,cutoff DESC LIMIT 1`
+        )
+        .get(recipients.length, ...recipients, recipients.length, recipients.length) as
+        { daily_date: string; cutoff: string | null } | undefined;
+      return row ? { dailyDate: row.daily_date, cutoff: row.cutoff } : null;
+    }
     const row = this.db
       .prepare(
         `SELECT daily_date,cutoff FROM monitor_outbox
-      WHERE delivered IS NOT NULL AND daily_date IS NOT NULL ORDER BY daily_date DESC LIMIT 1`
+      WHERE delivered IS NOT NULL AND daily_date IS NOT NULL ORDER BY daily_date DESC,cutoff DESC LIMIT 1`
       )
       .get() as { daily_date: string; cutoff: string | null } | undefined;
     return row ? { dailyDate: row.daily_date, cutoff: row.cutoff } : null;
