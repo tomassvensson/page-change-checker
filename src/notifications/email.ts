@@ -34,12 +34,16 @@ export async function sendEmail(
     disableUrlAccess: true
   });
 
-  await transporter.sendMail({
-    from: config.from,
-    to: config.to.join(', '),
-    subject: config.subject,
-    text: body
-  });
+  try {
+    await transporter.sendMail({
+      from: config.from,
+      to: config.to.join(', '),
+      subject: config.subject,
+      text: body
+    });
+  } finally {
+    transporter.close();
+  }
 }
 
 function assertPayloadWithinLimit(body: string, maxLength: number, channel: string): void {
