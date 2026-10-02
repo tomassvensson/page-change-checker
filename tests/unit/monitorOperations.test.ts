@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -188,6 +189,31 @@ describe('period, archival, health and production email assembly', () => {
     expect(rows[0].lastInterestingChangeAt).toBe('2026-10-01T07:00:00Z');
     expect(renderPeriodSummary(rows, '2026-10-01T10:00:00Z')).toContain('Recovered');
   });
+  it('does not call a continuing warning recovered merely because a different warning disappeared', () => {
+    const first = sample({
+      status: 'warning',
+      payload: { warnings: ['Metric unavailable', 'Activity unavailable'] }
+    });
+    const next = sample({
+      endedAt: '2026-10-01T07:00:00Z',
+      status: 'warning',
+      payload: { warnings: ['Metric unavailable'] }
+    });
+    const row = periodSummary(
+      [{ id: 'example', label: 'Example', url: 'https://example.com' }],
+      [first, next],
+      '2026-10-01T00:00:00Z',
+      '2026-10-01T10:00:00Z'
+    )[0];
+    expect(row.diagnostics.find((d) => d.message === 'Metric unavailable')).toMatchObject({
+      occurrences: 2,
+      recovered: false
+    });
+    expect(row.diagnostics.find((d) => d.message === 'Activity unavailable')).toMatchObject({
+      occurrences: 1,
+      recovered: true
+    });
+  });
   it('archives evidence with stable IDs, explicit expiry and compact delivered mail projections', () => {
     const root = mkdtempSync(join(tmpdir(), 'monitor-evidence-'));
     dirs.push(root);
@@ -219,6 +245,9 @@ describe('period, archival, health and production email assembly', () => {
       ).toBe(0);
       expect(journal.latestDailyDelivery()).toEqual({ dailyDate: '2026-10-01', cutoff: now });
       expect(store.archiveMail('mail', 'other')).toBe(store.archiveMail('mail', 'original'));
+      expect(
+        gunzipSync(readFileSync(join(root, store.archiveMail('mail', 'other')))).toString('utf8')
+      ).toContain('"html":"large"');
     } finally {
       journal.close();
     }
