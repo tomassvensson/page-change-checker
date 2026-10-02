@@ -32,6 +32,8 @@ export interface CaptureBundle {
   signature?: Signature;
 }
 
+class CaptureConsistencyError extends Error {}
+
 async function validate(page: Page, status: number | null, options: CaptureOptions) {
   if (status !== null && status >= 400) throw new Error(`HTTP ${status}; evidence not compared`);
   const text = await page.locator('body').innerText({ timeout: options.timeoutMs ?? 30000 });
@@ -164,7 +166,7 @@ export async function signatureFromPng(
   return { ...maskSignature(result, regions), title };
 }
 
-export async function capturePage(
+async function captureOnce(
   page: Page,
   rules: MonitorRule[],
   status: number | null,
@@ -172,6 +174,27 @@ export async function capturePage(
 ): Promise<CaptureBundle> {
   status = await settleImages(page, status, options);
   const title = options.title?.(await page.title()) ?? (await page.title());
+  // Scoped screenshots can scroll the document and trigger lazy content. Take
+  // them before reading text, then require the final full-page PNG to agree.
+  const signatures: Record<string, Signature> = {};
+  for (const rule of rules) {
+    if (rule.kind !== 'visualSnapshot' && rule.kind !== 'imageSnapshot') continue;
+    try {
+      const locator = page.locator(rule.selector ?? 'body').first();
+      await locator.waitFor({
+        state: 'visible',
+        timeout: rule.timeoutMs ?? options.timeoutMs ?? 30000
+      });
+      signatures[rule.id] = await signatureFromPng(
+        page,
+        await locator.screenshot({ animations: 'disabled' }),
+        title,
+        rule
+      );
+    } catch {
+      /* missing scoped input is diagnosed below */
+    }
+  }
   const text = await page.locator('body').innerText();
   const evidence: PageEvidence = {
     title,
@@ -204,8 +227,8 @@ export async function capturePage(
       else if (rule.kind === 'selectorContentSnapshot')
         evidence.inputs[rule.id] = { value: await semanticSnapshot(locator, rule) };
       else {
-        const png = await locator.screenshot({ animations: 'disabled' });
-        evidence.inputs[rule.id] = { signature: await signatureFromPng(page, png, title, rule) };
+        if (!signatures[rule.id]) throw new Error('Missing image input');
+        evidence.inputs[rule.id] = { signature: signatures[rule.id] };
       }
     } catch {
       evidence.inputs[rule.id] = {
@@ -218,8 +241,28 @@ export async function capturePage(
   );
   const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
   if (page.url() !== evidence.finalUrl || (await page.locator('body').innerText()) !== text)
-    throw new Error('Page changed during capture; inconsistent evidence rejected');
+    throw new CaptureConsistencyError(
+      'Page changed during capture; inconsistent evidence rejected'
+    );
   return { evidence, screenshot, signature: await signatureFromPng(page, screenshot, title) };
+}
+
+/** One bounded recapture handles lazy/scroll-triggered content. Authentication,
+ * HTTP status and image readiness are revalidated; unstable evidence is never
+ * committed and arbitrary failures are not hidden by this retry. */
+export async function capturePage(
+  page: Page,
+  rules: MonitorRule[],
+  status: number | null,
+  options: CaptureOptions
+): Promise<CaptureBundle> {
+  try {
+    return await captureOnce(page, rules, status, options);
+  } catch (error) {
+    if (!(error instanceof CaptureConsistencyError)) throw error;
+    await page.waitForTimeout(1000);
+    return captureOnce(page, rules, status, options);
+  }
 }
 
 /** Production orchestration, reused unchanged by local deployment and fixtures. */

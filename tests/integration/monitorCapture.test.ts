@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ensureCredentialsLogin } from '../../src/monitor/authentication.js';
 import {
@@ -31,6 +31,36 @@ const rule: MonitorRule = {
   message: 'Changed'
 };
 describe('actual production browser orchestration', () => {
+  it('recaptures once after a lazy update and rejects a continually inconsistent page', async () => {
+    await page.setContent('<title>Account</title><main>A</main>');
+    const original = page.screenshot.bind(page);
+    let calls = 0;
+    const spy = vi.spyOn(page, 'screenshot').mockImplementation(async (options) => {
+      const image = await original(options);
+      if (++calls === 1)
+        await page.locator('main').evaluate((el) => {
+          el.textContent = 'B';
+        });
+      return image;
+    });
+    const options = { navigate: () => Promise.resolve(200), authenticate: () => null };
+    try {
+      const bundle = await capturePage(page, [rule], 200, options);
+      expect(calls).toBe(2);
+      expect(bundle.evidence.text).toBe('B');
+      expect(bundle.evidence.inputs.r.value).toBe('B');
+      spy.mockImplementation(async (opts) => {
+        const image = await original(opts);
+        await page.locator('main').evaluate((el) => {
+          el.textContent += 'C';
+        });
+        return image;
+      });
+      await expect(capturePage(page, [rule], 200, options)).rejects.toThrow('inconsistent');
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it('confirms the initial baseline then a real one-row change with a change map', async () => {
     let text = 'A',
       navigations = 0;

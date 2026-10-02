@@ -141,6 +141,36 @@ export const monitorSettingsSchema = z
           });
         rules.add(rule.id);
       }
+      const progress = target.progress;
+      if (
+        progress?.activityResponseUrlContains &&
+        (!progress.activityDatePath || !progress.activityTimeZone)
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Response activity requires an explicit date path and time zone',
+          path: ['targets', index, 'progress']
+        });
+      if (progress?.activityTimeZone) {
+        try {
+          new Intl.DateTimeFormat('en-CA', { timeZone: progress.activityTimeZone });
+        } catch {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Invalid activity time zone',
+            path: ['targets', index, 'progress', 'activityTimeZone']
+          });
+        }
+      }
+      if (
+        progress?.activitySelector &&
+        (!progress.activeValues?.length || !progress.inactiveValues?.length)
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message: 'DOM activity requires explicit active and inactive values',
+          path: ['targets', index, 'progress']
+        });
     }
     for (const id of settings.duolingoProgressHistory?.activeTargetIds ?? [])
       if (!targets.has(id))
