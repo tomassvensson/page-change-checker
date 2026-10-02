@@ -1,121 +1,102 @@
-# Monitor reliability contract
+# Reliability contract and operations
 
-The private Windows deployment imports the reusable `src/monitor` library after
-`npm run build`. Private settings, browser profiles, operational SQLite, evidence,
-credentials and reports live under ignored `data/` and must never enter Git.
+The CLI and installed local monitor share a durable journal and claimed-delivery
+contract. The installed monitor's rule, browser, authentication, coordinator,
+history, reporting and replay modules are also tracked and exercised in CI.
+Real targets, rules, credentials, browser profiles, evidence and databases remain
+ignored local data. CI uses only synthetic identities and pages.
 
-## Alert and reporting policy
+## Check, baseline and delivery boundaries
 
-- Confirmed content changes can be immediate; HTTP/authentication/required-content
-  failures are diagnostics, never content changes.
-- HTTP 408/5xx and configured 403 failures still receive bounded retries. A 5xx
-  outage is reported in the daily digest only after the Berlin calendar day has
-  ended and **every recorded navigation attempt** for that target/day was 5xx.
-  A recovered check or non-5xx attempt defeats that condition. A daily target with
-  one failed scheduled check has one observation, not proof of continuous outage.
-- Other diagnostics are retained until the next daily reporting period even if
-  they recover before email time. Identical diagnostic evidence is coalesced.
-- The SQLite outbox freezes the report and image bytes before baseline state is
-  replaced. Pending mail is retried independently of current page conditions.
-  SMTP acceptance is journaled, not proof of inbox delivery. Delivery is
-  at-least-once: a crash after SMTP acceptance and before acknowledgement can
-  resend a message; deterministic Message-ID assists recipient deduplication.
-- Operational and history backlogs remain local until acknowledgement. Permanent
-  progress samples/events use one idempotent PostgreSQL transaction. Invalid or
-  unconfirmed observations are not written as progress history.
+HTTP/authentication/page validity guard every capture, including image retry
+reloads. Initial baselines and changes require two consistent captures. Rule A
+can be accepted when B is missing/unstable. Perceptual visual tolerance is shared
+by comparison and confirmation. A rule change rebaselines only that rule.
 
-## Operational evidence
+Check, confirmed content event and immutable accepted baseline revisions commit
+atomically. The CLI selector baseline and event also share one transaction.
+Unprojected events recover regardless of the current page. Frozen mail and stable
+Message-IDs are delivered through renewed, expiring SQLite claims shared by health
+and normal senders. Recipients are independently acknowledged. A crash after SMTP
+acceptance but before acknowledgement can still duplicate a message: this is
+at-least-once delivery, not exactly once. Acceptance is not proof of inbox receipt.
+Permanent payload rejection is visible quarantine; shared outages back off.
 
-`MonitorJournal` uses SQLite WAL with FULL synchronization. Check records and
-delivery attempts are append-only (database triggers reject updates/deletes).
-Records include run/target aliases, actual start/end, validation, retry HTTP
-statuses, authentication status, rule hash, evidence ID, storage outcome and
-archived result. Delivery records link to durable outbox events. The outbox and
-history spool are mutable projections, not substitutes for the check ledger.
+## Daily policy and coverage
 
-The local digest includes validated success rate, last attempt/success and age,
-duration, rejected candidates, recovered retries, unsent events and history
-backlog. Rejected candidates do not advance baselines. Atomic state replacement
-flushes a uniquely named temporary file and never deletes the valid destination
-first. Live process locks do not expire because a run is slow.
+All-day 5xx escalation requires a completed Berlin day in which every timestamped
+attempt was 5xx. Recovery or ambiguous legacy/midnight evidence defeats that claim.
+Recovered retries are daily metrics, not urgent content changes. Earlier missing
+content/login/storage diagnostics remain available after recovery. Repeated
+diagnostics are grouped instead of generating dozens of duplicate attachments.
 
-## Rule coverage and intentional blind spots
+Every configured target appears in the reporting-period summary, including earlier
+daily checks and interrupted-run omissions. Outcomes are validated unchanged,
+confirmed changed, inconclusive, failed, or not due/not checked. Last attempt, last
+fully validated success and latest content/progress event are separate.
 
-| Rule                      | Covers                                                           | Intentionally ignores                                                  |
-| ------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Required text             | Literal normalized text condition                                | Unrelated text and image changes                                       |
-| Statistic equals/triggers | Parsed numeric statistic beside its label                        | Cosmetic layout and images                                             |
-| Visible text snapshot     | Normalized visible text in the configured selector               | Image-only changes, layout, content outside selector                   |
-| Element content snapshot  | Visible text, relevant attributes and form state inside selector | Hidden/out-of-scope content and cosmetic CSS                           |
-| Visual snapshot           | Perceptual sampled rendering after readiness and confirmation    | Below-threshold pixel noise and explicitly declared comparison regions |
+The local watchdog uses per-target coverage and aged delivery/history queues.
+Never-attempted/never-successful configured targets cannot fall out of its metrics.
+Stopped/stale tasks can restart; unavailable site content alone does not trigger
+browser restarts. Component doctor checks browser launch, encrypted credentials,
+tasks, storage/free space, no-send SMTP TLS/authentication and native PostgreSQL
+client/server/password-file connectivity. A same-PC watchdog cannot detect that
+PC being off: independent NAS/Prometheus observation remains opt-in and no
+external heartbeat destination is enabled by default.
 
-Changing rules produces a new SHA-256 rules version; validated snapshots establish
-a new baseline when that version changes. Original screenshots remain untouched:
-ignored regions apply only to comparison signatures, never image overlays.
-The `streak_activated` history event currently means zero-to-positive day streak,
-not an independently verified daily flame/icon transition.
+## Rule coverage
 
-## Offline replay
+| Rule                  | Covers                                           | Intentionally ignores                                                                            |
+| --------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Required literal text | Normalized presence/absence                      | Layout/images/unrelated copy                                                                     |
+| Numeric condition     | Whole numeric value paired with label            | Trailing-zero coincidences and formatting separators                                             |
+| Scoped visible text   | Visible copy inside scope                        | Images/layout and explicitly ignored lines                                                       |
+| Semantic container    | Text, keyed cells, form values, meaningful links | Hidden content, framework/hover attributes, expiring link tokens; row order only when configured |
+| Scoped image/visual   | Rendered pixels within scope                     | Outside scope, declared ignored regions and sub-threshold repaint                                |
 
-Export archived local evidence using the private monitor's `--replay` option.
-Then experiment with a text filter, without live website access, authentication,
-mail, history insertion or baseline writes:
+Original screenshots are never masked or overlaid. A separate marked-change PNG
+can show small text, semantic or visual changes. Image readiness applies even with
+zero extra wait. Captures bind final URL, title, text, inputs and screenshot; one
+bounded recapture handles lazy updates, and persistently inconsistent pages are
+rejected without advancing a baseline.
 
-```powershell
-node dist/src/monitor/replay.js evidence.json filter.json
-```
+## Replay, history and retention
 
-Example **synthetic** filter:
+Actual rule definitions and per-rule baseline revisions are immutable local
+records. Production-engine replay handles numeric, literal, scoped semantic/forms,
+visual inputs and confirmation. It rechecks validity rather than trusting an old
+outcome flag. A new uncaptured selector is inconclusive and requires recapture;
+it is never fabricated from full-page text. The legacy `replayText` helper remains
+a conservative line-filter experiment, not full replay. Offline replay does not
+navigate, log in, advance baselines, insert history or send mail.
 
-```json
-{ "ignoredLines": ["Decorative arrow"], "requiredText": "Account overview" }
-```
+Native PostgreSQL samples/events are permanent. A local durable spool drains
+independently, chronologically and idempotently, with append-only queued,
+attempted, failed/rejected and committed outcomes. Daily activity is distinct from
+numeric streak increases, identity-checked against the monitored profile, with an
+explicit date/timezone source. Unknown activity remains unknown and a daily
+diagnostic; the signed-in account's practice is not used for another profile.
+`observedAt` is metric-read/detection time, not exact practice time.
+`intervalStartAt` is the prior valid observation when known. Preserve UTC instants
+and timezone offsets when graphing a repeated DST hour.
 
-Output identifies evidence, original status, proposed filter version, validity and
-would-change decisions. This is a text-filter replay, not a re-render of old
-screenshots or a claim that all selector rules can be reconstructed from text.
-Use the private `--doctor` and `--dashboard` options for local preflight/metrics.
-Their reports contain private aliases and must also stay local.
+Evidence uses content IDs and explicit capture/expiry metadata. PNG retention is
+configurable locally; current baselines/statistics are not pruned with screenshots.
+Delivered mail bodies are compressed outside SQLite after seven days; delivery
+lookups query compact metadata, not historical image payloads. Email evidence has
+target-labelled CID images and a portable HTML attachment containing image bytes.
+The append-only journal retains text/input observations and baseline definitions;
+image/bundle expiry is not a promise to erase those permanent audit records.
+Old validated success remains visible even outside the current digest window.
 
-## Synthetic regression matrix
+## Verification
 
-| Incident                                                | Automated evidence                                                                  |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| HTTP outage and recovery; 403 as error                  | monitorJournal and scraperReliability tests                                         |
-| HTTP 200 challenge shell                                | pageValidity tests                                                                  |
-| Login expiry, timeout and baseline preservation         | scraperSecurity and scraperReliability tests                                        |
-| Credential helper timeout/recovery                      | retryOperation tests; private runtime uses same helper                              |
-| Partial/delayed image readiness                         | imagesReady tests                                                                   |
-| Cosmetic repaint versus real one-row change             | monitorVisual and monitorReplay tests                                               |
-| Missing required selector/statistic outside digest time | dailyDiagnostics persistence/recovery tests                                         |
-| Unvalidated candidate followed by another candidate     | replay baseline-preservation test; private confirmation self-tests                  |
-| SMTP failure, process restart, recovery                 | durable outbox test; channel failure tests                                          |
-| Database failure after sample insertion                 | progressTransaction transaction/idempotence contract and durable spool restart test |
-| Interruption during state replacement                   | injected pre-replacement failure preserves destination                              |
-| Concurrent/initializing/long-running lock owner         | fileLock tests                                                                      |
-| Stopped task, stale success, delivery/history backlog   | monitorHealth tests                                                                 |
-
-Browser scenarios use local synthetic HTTP servers. No private target is accessed
-from CI. The opt-in `monitorPostgres` test injects an event-write failure after
-sample insertion using session-local TEMP tables, then checks rollback and an
-idempotent retry. It runs against PostgreSQL 18 in a separate synthetic CI service.
-For native Windows validation, set `PCC_TEST_PSQL` to the installed client path and
-`PCC_TEST_PGDATABASE` to a database covered by your pgpass credentials. It does not
-write permanent tables or use the computer's Docker database.
-
-## Quality gates
-
-`npm run verify` requires production audit, lint, formatting, build, unit/integration
-tests and browser tests. Global V8 **statements, branches, functions and lines each
-require >=81%**, with the explicit entrypoint/type/barrel exclusions in
-`vitest.config.ts`; this is neither per-file nor all-source 81% coverage.
-Sonar scan is mandatory in CI and waits up to 300 seconds for the configured
-SonarCloud project quality gate. Missing/invalid token, scan failure, timeout or
-failed gate fails CI. Secrets are deliberately not exposed to untrusted fork
-pull requests; those need a trusted maintainer branch for this mandatory scan.
-The local 81% gate does not depend on Sonar's default coverage threshold.
-
-The same-computer watchdog can recover a stopped monitor and throttle warnings
-to daily. It cannot alert when Windows is powered off or both tasks are stopped.
-An independently hosted observer of a minimal heartbeat is still needed for that
-failure mode; no external destination is implicitly configured.
+Run `npm run verify`. Synthetic scenarios exercise the deployed coordinator and
+browser paths, login recovery, delayed images, 200 shells, 403/503, one-row changes,
+unstable candidates, restart recovery, concurrent claims, poisoned mail, independent
+history draining, daily-target reporting, state replacement and stopped-task health.
+The opt-in PostgreSQL regression uses TEMP tables only, including atomic rollback,
+idempotency and daily-activity intervals. All four global V8 minimums remain 81%.
+Browser-evaluated functions also require browser assertions because Node coverage
+cannot measure their execution in Chromium. Mandatory Sonar gate success is a
+separate release requirement; failed/unavailable scanning is not a green gate.
