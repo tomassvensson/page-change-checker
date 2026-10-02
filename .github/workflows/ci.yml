@@ -92,8 +92,13 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+      - name: Install Chromium for production-path regressions
+        run: npx playwright install chromium
       - name: Exercise native persistence and reliability policies
-        run: npx vitest run monitorJournal monitorHistory monitorReplay monitorVisual monitorHealth fileLock
+        run: >-
+          npx vitest run monitorJournal monitorHistory monitorReplay monitorVisual
+          monitorHealth fileLock monitorOperations monitorRules monitorDelivery
+          monitorCoordinator monitorActivity monitorCapture cliDurability
 
   postgres-reliability:
     runs-on: ubuntu-latest
