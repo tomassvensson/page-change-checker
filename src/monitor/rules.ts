@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { pageValidity, ruleVersion } from './journal.js';
+import { semanticRowDiff } from './semantic.js';
 
 const bounded = (min: number, max: number) => z.number().finite().min(min).max(max);
 const common = {
@@ -125,6 +126,7 @@ export interface RuleAlert {
   observed: string;
   fingerprint: string;
   textDiff?: { oldText: string; newText: string };
+  rowChanges?: ReturnType<typeof semanticRowDiff>;
 }
 export interface RuleDecision {
   id: string;
@@ -293,17 +295,29 @@ export function evaluateEvidence(
         : previous.value !== text);
     const active = value.active ?? Boolean(different),
       changed = Boolean(active && (!previous || different));
+    let rowChanges: ReturnType<typeof semanticRowDiff> | undefined;
+    if (previous && different && rule.kind === 'selectorContentSnapshot') {
+      try {
+        rowChanges = semanticRowDiff(previous.value, text);
+      } catch {
+        /* Legacy unstructured evidence remains a text comparison. */
+      }
+    }
     const alert = active
       ? {
           id: rule.id,
           message: rule.message,
-          observed: value.signature
-            ? 'Visible rendering changed.'
-            : rule.kind === 'mustContainText'
-              ? 'Required text was not present.'
-              : text,
+          observed: rowChanges
+            ? `Container changed: ${rowChanges.added.length} rows added, ${rowChanges.removed.length} removed, ${rowChanges.changed.length} changed; form/text/link changes are included.`
+            : value.signature
+              ? 'Visible rendering changed.'
+              : rule.kind === 'mustContainText'
+                ? 'Required text was not present.'
+                : text,
           fingerprint: observation.hash,
-          ...(previous && rule.kind === 'visibleTextSnapshot'
+          ...(rowChanges ? { rowChanges } : {}),
+          ...(previous &&
+          (rule.kind === 'visibleTextSnapshot' || rule.kind === 'selectorContentSnapshot')
             ? { textDiff: { oldText: previous.value, newText: text } }
             : {})
         }

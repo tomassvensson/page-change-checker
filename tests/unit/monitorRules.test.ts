@@ -36,6 +36,18 @@ const signature = (n = 0): Signature => ({
   pixels: Buffer.alloc(48, n).toString('base64')
 });
 describe('shared production rule decisions', () => {
+  it('explains keyed semantic row changes without affecting legacy text comparisons', () => {
+    const table: MonitorRule = { ...rule, kind: 'selectorContentSnapshot' };
+    const ev = (value: string) => evidence(value);
+    const a = JSON.stringify({ tables: [{ rows: [{ key: 'Math', cells: ['Math', '2'] }] }] });
+    const b = JSON.stringify({ tables: [{ rows: [{ key: 'Math', cells: ['Math', '1'] }] }] });
+    const baseline = acceptedObservations(confirmEvidence([table], ev(a), ev(a)));
+    const decision = confirmEvidence([table], ev(b), ev(b), baseline)[0];
+    expect(decision.alert?.rowChanges?.changed).toHaveLength(1);
+    expect(decision.alert?.observed).toContain('1 changed');
+    const legacy = acceptedObservations(confirmEvidence([table], ev('A'), ev('A')));
+    expect(confirmEvidence([table], ev('B'), ev('B'), legacy)[0].changed).toBe(true);
+  });
   it.each([
     '100\nTotal XP',
     '100 Total XP',

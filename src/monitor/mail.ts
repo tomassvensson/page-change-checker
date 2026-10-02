@@ -17,6 +17,12 @@ export interface EvidenceResult {
   text?: string;
   error?: string | null;
   warnings?: string[];
+  alerts?: {
+    message: string;
+    observed: string;
+    textDiff?: { oldText: string; newText: string };
+    rowChanges?: unknown;
+  }[];
   screenshotPath?: string | null;
   diffScreenshotPath?: string | null;
 }
@@ -88,6 +94,13 @@ export function projectMonitorMail(
     ).values()
   ];
   const attachments: FrozenMail['attachments'] = [];
+  const conditionText = (result: EvidenceResult) =>
+    (result.alerts ?? [])
+      .map(
+        (a) =>
+          `${a.message}: ${a.observed}${a.textDiff ? `\nPrevious:\n${a.textDiff.oldText}\nCurrent:\n${a.textDiff.newText}` : ''}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`
+      )
+      .join('\n');
   const details = selected
     .map((result) => {
       const imageHtml = [result.screenshotPath, result.diffScreenshotPath]
@@ -105,7 +118,7 @@ export function projectMonitorMail(
           return `<p>${index ? 'Marked changes (original is separate)' : 'Original screenshot'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${index ? 'changes' : 'original'}" style="max-width:100%"></a>`;
         })
         .join('');
-      return `<h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p>${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><pre>${escape(result.text ?? '')}</pre>`;
+      return `<h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p><pre>${escape(conditionText(result))}</pre>${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><pre>${escape(result.text ?? '')}</pre>`;
     })
     .join('');
   const metrics = journal.queueHealth(options.now);
@@ -133,12 +146,19 @@ export function projectMonitorMail(
         subject: `${options.subjectPrefix} — ${options.dailyDate ?? 'confirmed change'}`,
         html,
         portableHtml,
-        text: summaries
-          .map(
-            (r) =>
-              `${r.title}\n${r.url}\n${r.outcome}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered)' : ''}`).join('\n')}`
-          )
-          .join('\n\n'),
+        text:
+          summaries
+            .map(
+              (r) =>
+                `${r.title}\n${r.url}\n${r.outcome}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered)' : ''}`).join('\n')}`
+            )
+            .join('\n\n') +
+          selected
+            .map(
+              (r) =>
+                `\n\n${r.title ?? r.label}\n${r.url}\n${conditionText(r)}\n${r.error ?? r.warnings?.join('; ') ?? ''}\nCaptured page text:\n${r.text ?? ''}`
+            )
+            .join(''),
         recipient,
         attachments,
         dailyDate: options.dailyDate ?? null,
