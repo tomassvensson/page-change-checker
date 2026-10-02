@@ -6,7 +6,8 @@ import { scrapeAll } from '../browser/scraper.js';
 import { acquireFileLock } from '../core/fileLock.js';
 import { createRunLogger, log } from '../core/logger.js';
 import type { LoadedUrl } from '../core/types.js';
-import { notify } from '../notifications/index.js';
+import { MonitorJournal } from '../monitor/journal.js';
+import { deliverCliEvents, recordCliObservation } from '../notifications/durable.js';
 import { formatResults } from '../reporting/reporter.js';
 import { openDatabase, resolveUrls, seedFromConfig } from '../storage/db.js';
 
@@ -164,10 +165,17 @@ async function runOnce(
         includeUnseeded: opts.dryRun
       });
       urls = applyUrlFilters(urls, opts);
+      const journal = !opts.dryRun && config.notifications ? new MonitorJournal(db) : null;
+      if (journal && config.notifications)
+        await deliverCliEvents(journal, config.notifications, config.network);
       const results = await scrapeAll(db, config, urls, {
         dryRun: opts.dryRun,
         logger,
-        signal
+        signal,
+        onObservation:
+          journal && config.notifications
+            ? (result) => recordCliObservation(journal, result, config.notifications!)
+            : undefined
       });
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));
@@ -175,7 +183,7 @@ async function runOnce(
         console.log(formatResults(results));
       }
       if (!opts.dryRun && config.notifications) {
-        await notify(results, config.notifications, { logger, network: config.network });
+        if (journal) await deliverCliEvents(journal, config.notifications, config.network);
       }
     } finally {
       db.close();

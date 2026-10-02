@@ -249,6 +249,12 @@ export class MonitorJournal {
     now = new Date().toISOString()
   ): void {
     this.db.transaction(() => {
+      const configured = new Set(targets.map((t) => t.id));
+      for (const row of this.db.prepare('SELECT target FROM monitor_targets').all() as {
+        target: string;
+      }[])
+        if (!configured.has(row.target))
+          this.db.prepare('DELETE FROM monitor_targets WHERE target=?').run(row.target);
       for (const target of targets)
         this.db
           .prepare(
@@ -276,6 +282,10 @@ export class MonitorJournal {
       .run(id, now, JSON.stringify(payload), meta?.dailyDate ?? null, meta?.cutoff ?? null);
   }
 
+  hasMail(id: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM monitor_outbox WHERE id=?').get(id));
+  }
+
   enqueueEvents(
     id: string,
     payload: unknown,
@@ -289,6 +299,21 @@ export class MonitorJournal {
         this.db
           .prepare('INSERT OR IGNORE INTO monitor_routes VALUES(?,?,?)')
           .run(event, channel, id);
+    })();
+  }
+
+  projectDestinations(
+    messages: { id: string; payload: unknown; eventIds: string[] }[],
+    channel = 'email',
+    now = new Date().toISOString()
+  ): void {
+    this.db.transaction(() => {
+      for (const mail of messages) this.enqueue(mail.id, mail.payload, now);
+      for (const mail of messages)
+        for (const event of mail.eventIds)
+          this.db
+            .prepare('INSERT OR IGNORE INTO monitor_routes VALUES(?,?,?)')
+            .run(event, channel, mail.id);
     })();
   }
 
@@ -321,6 +346,33 @@ export class MonitorJournal {
       )
       .get() as { daily_date: string; cutoff: string | null } | undefined;
     return row ? { dailyDate: row.daily_date, cutoff: row.cutoff } : null;
+  }
+
+  events(since: string, until: string): ContentEvent[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM monitor_events WHERE at>=? AND at<? ORDER BY at,id')
+        .all(since, until) as {
+        id: string;
+        target: string;
+        at: string;
+        kind: ContentEvent['kind'];
+        payload: string;
+      }[]
+    ).map((row) => ({ ...row, payload: JSON.parse(row.payload) as unknown }));
+  }
+
+  archiveDelivered(before: string, archive: (id: string, payload: string) => string): number {
+    const rows = this.db
+      .prepare('SELECT id,payload FROM monitor_outbox WHERE delivered<? AND payload NOT LIKE ?')
+      .all(before, '{"archive":%') as MailRecord[];
+    for (const row of rows) {
+      const name = archive(row.id, row.payload);
+      this.db
+        .prepare('UPDATE monitor_outbox SET payload=? WHERE id=? AND delivered IS NOT NULL')
+        .run(JSON.stringify({ archive: name }), row.id);
+    }
+    return rows.length;
   }
 
   claim(owner: string, now: string, leaseMs = 120_000): MailRecord | null {
@@ -425,7 +477,9 @@ export class MonitorJournal {
 
   backlog(): MailRecord[] {
     return this.db
-      .prepare('SELECT id,payload FROM monitor_spool ORDER BY created,id')
+      .prepare(
+        "SELECT id,payload FROM monitor_spool ORDER BY coalesce(json_extract(payload,'$.observedAt'),created),id"
+      )
       .all() as MailRecord[];
   }
 
@@ -446,6 +500,17 @@ export class MonitorJournal {
     return this.db
       .prepare('SELECT outcome,at,detail FROM monitor_storage WHERE sample=? ORDER BY id')
       .all(id) as { outcome: string; at: string; detail: string }[];
+  }
+
+  storageRecords(
+    since: string,
+    until: string
+  ): { sample: string; at: string; outcome: string; detail: string }[] {
+    return this.db
+      .prepare(
+        'SELECT sample,at,outcome,detail FROM monitor_storage WHERE at>=? AND at<? ORDER BY id'
+      )
+      .all(since, until) as { sample: string; at: string; outcome: string; detail: string }[];
   }
 
   metrics(since: string, until: string) {
@@ -477,7 +542,14 @@ export class MonitorJournal {
           'SELECT ended FROM monitor_checks WHERE target=? AND ended<? ORDER BY ended DESC LIMIT 1'
         )
         .get(target, until) as { ended: string } | undefined;
-      const registered = configured?.registered ?? lastAttempt?.ended ?? since;
+      const earliest = this.db
+        .prepare('SELECT min(started) AS at FROM monitor_checks WHERE target=?')
+        .get(target) as { at: string | null };
+      const registered =
+        [configured?.registered, earliest.at]
+          .filter((v): v is string => Boolean(v))
+          .sort()
+          .at(0) ?? since;
       return {
         target,
         attempts: rows.length,

@@ -8,6 +8,7 @@ export interface NotificationContentOptions {
 }
 
 export interface ChannelDeliveryOptions extends NotificationContentOptions {
+  messageId?: string;
   maxPayloadLength: number;
   timeoutMs: number;
   networkGuard: NetworkGuard;
@@ -17,6 +18,7 @@ export function resolveDeliveryOptions(
   options: Partial<ChannelDeliveryOptions> = {}
 ): ChannelDeliveryOptions {
   return {
+    messageId: options.messageId,
     contentMode: options.contentMode ?? 'summary',
     maxContentLength: options.maxContentLength ?? 500,
     maxPayloadLength: options.maxPayloadLength ?? 1_000_000,
