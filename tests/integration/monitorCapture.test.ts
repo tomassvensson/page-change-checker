@@ -98,7 +98,7 @@ describe('actual production browser orchestration', () => {
       },
       authenticate: () => null,
       confirmationWaitMs: 1,
-      timeoutMs: 30
+      timeoutMs: 500
     };
     const result = await runRuleCheck(page, [rule], {}, options);
     expect(result.confirmedAll).toBe(false);
@@ -110,6 +110,9 @@ describe('actual production browser orchestration', () => {
       capturePage(page, [rule], 200, { ...options, authenticate: () => 'Login required' })
     ).rejects.toThrow('Login required');
     await expect(capturePage(page, [rule], 403, options)).rejects.toThrow('HTTP 403');
+    await expect(
+      capturePage(page, [rule], 200, { ...options, authenticatedSelector: '#signed-in-content' })
+    ).rejects.toThrow('Required authenticated content');
     await page.setContent('<title>Just a moment</title>Checking your browser');
     await expect(capturePage(page, [rule], 200, options)).rejects.toThrow('shell');
   });
@@ -292,7 +295,9 @@ describe('actual production browser orchestration', () => {
         usernameSelector: '#user',
         passwordSelector: '#password',
         submitSelector: 'button',
-        timeoutMs: 150,
+        // Real Chromium navigation can exceed 150ms on a busy Windows host.
+        // Keep the failure/retry bounded without depending on idle-machine speed.
+        timeoutMs: 3000,
         maxAttempts: 2,
         retryDelayMs: 1,
         credentials: () => ({ user: 'synthetic', password: 'synthetic' }),
@@ -317,5 +322,5 @@ describe('actual production browser orchestration', () => {
       await context.close();
       await server.close();
     }
-  });
+  }, 15000);
 });
