@@ -1,9 +1,19 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 import { atomicWrite } from './journal.js';
+
+/** Exclusive creation is the existence check. A competing writer cannot cause
+ * overwrite or a check/use race; an already frozen archive remains unchanged. */
+function writeOnce(path: string, content: Buffer) {
+  try {
+    writeFileSync(path, content, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+}
 
 /** Content-addressed local archive. Metadata survives expiry; statistical history
  * is never pruned. No remote URL, filesystem path or executable input is accepted. */
@@ -20,8 +30,7 @@ export class EvidenceStore {
         .update(json)
         .update(png ?? '')
         .digest('hex');
-    if (png && !existsSync(join(this.root, `${id}.png`)))
-      writeFileSync(join(this.root, `${id}.png`), png, { flag: 'wx', mode: 0o600 });
+    if (png) writeOnce(join(this.root, `${id}.png`), png);
     atomicWrite(
       join(this.root, `${id}.json`),
       JSON.stringify({
@@ -70,7 +79,7 @@ export class EvidenceStore {
   archiveMail(id: string, payload: string) {
     const name = createHash('sha256').update(id).digest('hex') + '.mail.json.gz',
       path = join(this.root, name);
-    if (!existsSync(path)) writeFileSync(path, gzipSync(payload), { flag: 'wx', mode: 0o600 });
+    writeOnce(path, gzipSync(payload));
     return name;
   }
 }
