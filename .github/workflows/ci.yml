@@ -95,6 +95,40 @@ jobs:
       - name: Exercise native persistence and reliability policies
         run: npx vitest run monitorJournal monitorHistory monitorReplay monitorVisual monitorHealth fileLock
 
+  postgres-reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Install dependencies
+        env:
+          HUSKY: 0
+        run: npm ci
+      - name: Exercise PostgreSQL rollback and retry
+        env:
+          PCC_TEST_PSQL: psql
+          PGPASSWORD: synthetic-ci-only
+        run: npx vitest run tests/integration/monitorPostgres.test.ts
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -96,9 +96,12 @@ Their reports contain private aliases and must also stay local.
 | Stopped task, stale success, delivery/history backlog   | monitorHealth tests                                                                 |
 
 Browser scenarios use local synthetic HTTP servers. No private target is accessed
-from CI. PostgreSQL SQL-generation tests do not prove a real server's rollback;
-deployment verification should additionally exercise a disposable PostgreSQL
-schema before claiming end-to-end storage fault coverage.
+from CI. The opt-in `monitorPostgres` test injects an event-write failure after
+sample insertion using session-local TEMP tables, then checks rollback and an
+idempotent retry. It runs against PostgreSQL 18 in a separate synthetic CI service.
+For native Windows validation, set `PCC_TEST_PSQL` to the installed client path and
+`PCC_TEST_PGDATABASE` to a database covered by your pgpass credentials. It does not
+write permanent tables or use the computer's Docker database.
 
 ## Quality gates
 
