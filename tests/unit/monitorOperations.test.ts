@@ -240,6 +240,8 @@ describe('period, archival, health and production email assembly', () => {
             ...(sample().payload as object),
             evidenceId: id,
             status: 'alert',
+            text: 'Account\nChanged row',
+            alerts: [{ message: 'Rows changed', observed: '1 changed' }],
             screenshotPath: store.imagePath(id),
             diffScreenshotPath: null
           }
@@ -261,6 +263,9 @@ describe('period, archival, health and production email assembly', () => {
       expect(mail.portableHtml).toContain('data:image/png;base64');
       expect(mail.attachments[0].filename).toContain('example-');
       expect(mail.text).toContain('successful 1');
+      expect(mail.text).toContain('Rows changed: 1 changed');
+      expect(mail.text).toContain('Account\nChanged row');
+      expect(mail.html).toContain('Rows changed: 1 changed');
       expect(projectMonitorMail(journal, options)).toBe(0);
       expect(projectMonitorMail(journal, { ...options, dailyDate: '2026-10-01' })).toBe(2);
       expect(projectMonitorMail(journal, { ...options, dailyDate: '2026-10-01' })).toBe(0);
