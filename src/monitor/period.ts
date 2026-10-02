@@ -51,15 +51,20 @@ export function periodSummary(
       (c) =>
         c.target === target.id && (c.outageDay ? c.outageDay >= dayKey(since) : c.endedAt >= since)
     );
-    const grouped = new Map<string, { check: CheckRecord; count: number }>();
-    const issueMessage = (c: CheckRecord) =>
-      (c.payload as Result)?.error ??
-      (c.payload as Result)?.warnings?.join('; ') ??
-      'Validation failed';
+    const grouped = new Map<string, { check: CheckRecord; message: string; count: number }>();
+    const issueMessages = (c: CheckRecord) => {
+      const payload = c.payload as Result;
+      const messages = [payload?.error, ...(payload?.warnings ?? [])].filter((v): v is string =>
+        Boolean(v)
+      );
+      return [...new Set(messages.length ? messages : c.validated ? [] : ['Validation failed'])];
+    };
     for (const c of issues) {
-      const key = (c.outageDay ?? '') + ':' + issueMessage(c),
-        old = grouped.get(key);
-      grouped.set(key, { check: c, count: (old?.count ?? 0) + 1 });
+      for (const message of issueMessages(c)) {
+        const key = (c.outageDay ?? '') + ':' + message,
+          old = grouped.get(key);
+        grouped.set(key, { check: c, message, count: (old?.count ?? 0) + 1 });
+      }
     }
     const recovered5xx = rows
       .filter((c) => c.validated)
@@ -100,16 +105,13 @@ export function periodSummary(
         (n, c) => n + Math.max(0, Date.parse(c.endedAt) - Date.parse(c.startedAt)),
         0
       ),
-      diagnostics: [...grouped.values()].map(({ check: c, count }) => ({
+      diagnostics: [...grouped.values()].map(({ check: c, message, count }) => ({
         occurrences: count,
         at: c.endedAt,
         outageDay: c.outageDay ?? null,
-        message:
-          (c.payload as Result)?.error ??
-          (c.payload as Result)?.warnings?.join('; ') ??
-          'Validation failed',
+        message,
         recovered: Boolean(
-          valid && valid.endedAt > c.endedAt && issueMessage(valid) !== issueMessage(c)
+          valid && valid.endedAt > c.endedAt && !issueMessages(valid).includes(message)
         )
       }))
     };
