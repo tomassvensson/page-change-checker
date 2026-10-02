@@ -525,7 +525,8 @@ export interface ScrapeObservationCommit {
 /** Persist one complete observation atomically after all reads and validation succeed. */
 export function commitScrapeObservation(
   db: SqliteDatabase,
-  observation: ScrapeObservationCommit
+  observation: ScrapeObservationCommit,
+  recordEvent?: () => void
 ): void {
   db.transaction(() => {
     updateUrlStatus(db, observation.urlId, observation.httpStatus);
@@ -535,6 +536,7 @@ export function commitScrapeObservation(
     for (const target of observation.targets) {
       updateTargetContent(db, target.id, target.content);
     }
+    recordEvent?.();
   })();
 }
 

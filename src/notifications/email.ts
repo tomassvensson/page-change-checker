@@ -26,6 +26,7 @@ export async function sendEmail(
     host: config.smtp.host,
     port: config.smtp.port,
     secure: config.smtp.secure,
+    requireTLS: !config.smtp.secure,
     auth: config.smtp.auth,
     connectionTimeout: delivery.timeoutMs,
     greetingTimeout: delivery.timeoutMs,
@@ -35,12 +36,19 @@ export async function sendEmail(
   });
 
   try {
-    await transporter.sendMail({
+    const accepted = await transporter.sendMail({
       from: config.from,
       to: config.to.join(', '),
       subject: config.subject,
+      messageId: delivery.messageId,
       text: body
     });
+    const receipt = accepted as { rejected?: unknown[]; accepted?: unknown[] };
+    if (receipt.rejected?.length || receipt.accepted?.length === 0)
+      throw Object.assign(new Error('SMTP rejected notification recipient'), {
+        responseCode: 550,
+        command: 'RCPT TO'
+      });
   } finally {
     transporter.close();
   }

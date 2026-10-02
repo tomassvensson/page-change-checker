@@ -135,6 +135,8 @@ export interface ScrapeOptions {
   logger?: Logger;
   /** Cancels pending waits and closes active browser contexts on shutdown. */
   signal?: AbortSignal;
+  /** Persist a notification event inside the successful baseline transaction. */
+  onObservation?: (result: UrlScrapeResult) => void;
 }
 
 export async function scrapeAll(
@@ -243,6 +245,8 @@ async function scrapeOriginGroup(
             result = failureResult(loadedUrl, error, result.httpStatus, options, true);
           }
         }
+        if (!options.dryRun && (result.error || result.loginNeeded))
+          options.onObservation?.(result);
         return result;
       } finally {
         globalSem.release();
@@ -391,24 +395,7 @@ async function scrapeOne(
         logger
       );
 
-      throwIfAborted(options.signal);
-      if (!options.dryRun) {
-        try {
-          commitScrapeObservation(db, {
-            urlId: loadedUrl.url.id,
-            httpStatus,
-            loginChecks: login.updates,
-            targets: targets.updates
-          });
-        } catch (error) {
-          if (screenshotPath) {
-            await rm(screenshotPath, { force: true }).catch(() => undefined);
-          }
-          throw error;
-        }
-      }
-
-      return {
+      const result: UrlScrapeResult = {
         url: loadedUrl.url.url,
         tags: loadedUrl.tags,
         httpStatus,
@@ -419,6 +406,28 @@ async function scrapeOne(
         screenshotPath,
         dryRun: options.dryRun ?? false
       };
+      throwIfAborted(options.signal);
+      if (!options.dryRun) {
+        try {
+          commitScrapeObservation(
+            db,
+            {
+              urlId: loadedUrl.url.id,
+              httpStatus,
+              loginChecks: login.updates,
+              targets: targets.updates
+            },
+            () => options.onObservation?.(result)
+          );
+        } catch (error) {
+          if (screenshotPath) {
+            await rm(screenshotPath, { force: true }).catch(() => undefined);
+          }
+          throw error;
+        }
+      }
+
+      return result;
     } catch (error) {
       if (error instanceof PageChangeCheckerError) {
         throw new ScrapeAttemptError(error, httpStatus);
