@@ -82,7 +82,8 @@ function applyExtractRegex(content: string, pattern: string | null): string {
   try {
     re = new RegExp(pattern);
   } catch {
-    process.stderr.write(`[pageReader] invalid extractRegex "${pattern}" — ignored\n`);
+    // Config validation rejects this in normal operation. Keep the low-level
+    // helper defensive for direct callers without echoing arbitrary patterns.
     return content;
   }
   const match = re.exec(content);

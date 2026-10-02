@@ -5,7 +5,7 @@
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_page-change-checker&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tomassvensson_page-change-checker)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tomassvensson_page-change-checker&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tomassvensson_page-change-checker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
 
 **You care when a web page changes. This tool tells you when it does.**
@@ -21,8 +21,9 @@ Most change-detection services are either SaaS (privacy concern, cost), too coar
 - uses a **real browser** so JavaScript-rendered content, cookie banners, and session cookies all work,
 - watches **specific elements** via CSS selectors rather than whole-page hashes,
 - stores snapshots in a **local SQLite database** so you own your data,
-- handles **login walls** interactively and reuses the session on later runs,
-- ships with a **CI pipeline, type checking, linting, unit tests, integration tests, and E2E tests**.
+- protects authenticated baselines: login checks run before watched content and logged-out pages cannot replace snapshots,
+- isolates browser state per origin and applies configured credentials only to the exact target origin,
+- ships with dependency auditing, pinned CI actions, CodeQL, type checking, linting, unit, integration, and real-browser tests.
 
 It is intentionally a single-machine tool. If you need distributed monitoring, use it as a starting point.
 
@@ -35,7 +36,7 @@ It is intentionally a single-machine tool. If you need distributed monitoring, u
 | A price dropped on a product you want         | You check manually every day  | You get a console diff the moment it changes      |
 | A job posting you are watching disappears     | You notice days later         | The next scheduled run reports "selector missing" |
 | A competitor updates their pricing page       | You only find out by accident | A diff shows exactly what changed                 |
-| A legal or regulatory page is quietly amended | You may never know            | The diff is stored alongside a timestamp          |
+| A legal or regulatory page is quietly amended | You may never know            | The run reports an exact unified diff             |
 
 ---
 
@@ -53,7 +54,7 @@ It is intentionally a single-machine tool. If you need distributed monitoring, u
 
 ### Prerequisites
 
-- [Node.js 20+](https://nodejs.org/)
+- [Node.js 22+](https://nodejs.org/)
 - npm (included with Node.js)
 
 ### Linux / macOS
@@ -82,6 +83,22 @@ npm run scrape
 
 The first `npm run scrape` creates the SQLite database and records baseline snapshots. The second run (and every run after) compares against those snapshots and reports diffs.
 
+### Docker
+
+Create writable bind-mount directories before starting the non-root container:
+
+```bash
+cp config.example.json config.json
+mkdir -p data screenshots
+docker compose up --build
+```
+
+On Linux, if those directories are not owned by UID 1000, run `chown -R 1000:1000 data screenshots` or set equivalent ACLs. The Compose profile uses a read-only root filesystem; only the mounted data, screenshot, and bounded tmpfs paths are writable.
+
+The production image installs Chromium's headless shell only. Complete any
+interactive-login bootstrap in a visible local environment, or build a custom
+image/display setup for headed Chromium.
+
 ---
 
 ## Sample console output
@@ -95,8 +112,8 @@ URL: https://www.example.com/product/abc
 HTTP status: 200
 Login necessary: no
 Selector: span.price [0] mode=innerText exists=yes matches=1
-  changed: no (first run — baseline recorded)
-  content: €49.99
+  changed: baseline created
+  new: €49.99
 ```
 
 Every subsequent run compares against this baseline.
@@ -135,8 +152,7 @@ Selector: span.price [0] mode=innerText exists=yes matches=1
 URL: https://careers.example.com/jobs
 HTTP status: 200
 Login necessary: no
-Selector: li.job-listing [0] mode=innerText exists=no matches=0
-  problem: selector did not match the requested element
+Problem: Selector "li.job-listing" [0] matched no element
 ```
 
 ### Login needed
@@ -147,8 +163,6 @@ HTTP status: 200
 Login necessary: yes
 Login check: div.user-avatar [0] exists=no matched=no
   after-login content: profile menu
-Selector: h2.plan-name [0] mode=innerText exists=no matches=0
-  problem: selector did not match the requested element
 ```
 
 ---
@@ -170,24 +184,25 @@ screenshots/
 
 ```mermaid
 flowchart LR
-    A[config.json] --> B[Playwright / Chromium]
-    B --> C{Cookie consent\nauto-accept}
-    C --> D[CSS selector\nextraction]
-    D --> E[SQLite snapshot\ncomparison]
-    E --> F[Console diff\nreport]
-    G[Login flow\ninteractive] -.->|session reuse| B
-    E --> G
+    A["Strict config + env references"] --> B["Per-origin Chromium profile"]
+    B --> C["Outbound network guard"]
+    C --> D{"Login checks pass?"}
+    D -->|no| E["Report login required; preserve baselines"]
+    D -->|yes| F["Read and validate every selector"]
+    F --> G["Atomic SQLite transaction"]
+    G --> H["Console report + minimized notifications"]
 ```
 
 Data flow on each run:
 
 1. `config.json` is validated with Zod and loaded into memory.
-2. Playwright opens a persistent Chromium profile (`data/user-data`) so session cookies survive between runs.
-3. Cookie-consent banners are automatically dismissed if a matching button is found.
-4. If a `loginChecks` selector is absent, the interactive login flow opens a visible browser window and waits for you to log in; the session is then saved for future runs.
-5. Each watched CSS selector is extracted from the live DOM.
-6. The extracted content is compared against the last snapshot stored in SQLite.
-7. Changed, missing, or new selectors are printed as a unified diff.
+2. Playwright opens a separate persistent Chromium profile per origin so sessions survive without sharing one profile across unrelated sites.
+3. Every navigation, redirect, and subresource is checked by the outbound network policy. Private/reserved destinations are blocked by default.
+4. Optional cookie-consent handling runs only when explicitly enabled.
+5. Login checks run before watched selectors. A failed login check records authentication status but never updates watched baselines.
+6. Every selector is read and validated in memory; missing, malformed, or oversized content invalidates the observation.
+7. URL status, login checks, and all target snapshots are committed in one SQLite transaction.
+8. The console receives the full report; third-party notifications default to summary-only content.
 
 ---
 
@@ -196,9 +211,15 @@ Data flow on each run:
 - [x] Real Chromium browser via Playwright — renders JavaScript, handles SPAs
 - [x] CSS selector targeting — watch specific elements, not whole pages
 - [x] `innerText` or `innerHTML` comparison mode per selector
-- [x] Persistent browser profile — cookies and local storage reused across runs
-- [x] Automatic cookie-consent banner dismissal (configurable selectors and text regex)
+- [x] Per-origin persistent browser profiles — cookies and local storage reused without cross-site profile sharing
+- [x] Opt-in cookie-consent banner dismissal (configurable selectors and text regex)
 - [x] Interactive login flow with configurable timeout; session is saved for later runs
+- [x] Authentication gate — logged-out and error pages cannot overwrite authenticated baselines
+- [x] SSRF-oriented outbound network policy for navigations, redirects, subresources, webhooks, and SMTP
+- [x] Target-origin-only custom headers, including `Authorization`
+- [x] Atomic observation commits and config-authoritative URL/selector reconciliation
+- [x] Cross-process database lock and transactionally consistent, integrity-checked migration backups
+- [x] Secret redaction, exact `${ENV_VAR}` references, bounded notification payloads, and delivery timeouts
 - [x] SQLite snapshot storage — no external service, no cloud dependency
 - [x] Unified diff output when content changes
 - [x] Email, webhook (Slack / Discord / Teams / generic), and Telegram notifications for detected changes
@@ -207,6 +228,27 @@ Data flow on each run:
 - [x] `initialLastContent` baseline — seed a known value without a live scrape
 - [x] Single page load per URL per run, even with multiple watched selectors
 - [x] Full quality pipeline: TypeScript, ESLint, Prettier, Vitest, Playwright E2E, SonarCloud
+- [x] Non-root, read-only Docker runtime with dropped capabilities
+
+---
+
+## Security model
+
+This is a local CLI, not a network service, so it has no application user database or HTTP authentication layer. Its important trust boundary is different: the operator-controlled config is trusted, while monitored pages and notification endpoints are treated as untrusted network inputs.
+
+- Only HTTP(S) target and webhook URLs are accepted; embedded URL credentials and unknown config keys are rejected.
+- Private, loopback, link-local, metadata, multicast, documentation, and reserved IP ranges are blocked by default. Use `network.allowPrivateAddresses` or a narrow `network.allowedHosts` entry only for intentional intranet monitoring.
+- Outbound policy checks apply to page redirects and subresources, not just the initial URL.
+- `browser.extraHTTPHeaders` are attached only to requests whose origin exactly matches the configured target. They are never forwarded to third-party images, scripts, redirects, or analytics hosts.
+- A page must pass every login check before any watched content is evaluated or persisted.
+- Snapshot updates are all-or-nothing. HTTP errors, missing/malformed selectors, oversized content, and comparison failures leave prior baselines intact.
+- Browser profiles are separated by origin. Secrets can be supplied with exact `${ENV_VAR}` config values; structured logs redact credential-like fields and sensitive URL query parameters.
+- Notifications default to `contentMode: "summary"`, omit local screenshot paths, enforce timeouts, and can be configured to fail the run with `failOnError`.
+- The SQLite file, browser profile directories, lock file, and screenshots use restrictive permissions where the platform supports them.
+- Docker runs as UID 1000 with a read-only root filesystem, no Linux capabilities, `no-new-privileges`, bounded tmpfs mounts, and a larger isolated shared-memory allocation for Chromium.
+- CI runs a production dependency audit, immutable action revisions, CodeQL, static checks, coverage, browser tests, and a non-root container smoke test.
+
+See [SECURITY.md](SECURITY.md) for reporting guidance and residual risks.
 
 ---
 
@@ -216,30 +258,37 @@ Copy `config.example.json` to `config.json` and edit it. The file is validated o
 
 ### Top-level options
 
-| Key                            | Type      | Default                             | Description                                                                        |
-| ------------------------------ | --------- | ----------------------------------- | ---------------------------------------------------------------------------------- |
-| `databasePath`                 | `string`  | `"data/page-change-checker.sqlite"` | Path to the SQLite database file. Created automatically on first run.              |
-| `normalize.trimWhitespace`     | `boolean` | `true`                              | Strip leading/trailing whitespace from extracted content before comparing.         |
-| `normalize.collapseWhitespace` | `boolean` | `true`                              | Collapse runs of whitespace to a single space.                                     |
-| `normalize.caseInsensitive`    | `boolean` | `false`                             | Lower-case content before comparing.                                               |
-| `retry.maxAttempts`            | `number`  | `3`                                 | Maximum number of scrape attempts per URL before giving up.                        |
-| `retry.baseDelayMs`            | `number`  | `1000`                              | Initial retry delay in milliseconds.                                               |
-| `retry.backoffFactor`          | `number`  | `2`                                 | Multiplier applied to delay on each successive retry (exponential backoff).        |
-| `concurrency.global`           | `number`  | `3`                                 | Maximum number of URLs scraped simultaneously across all hosts.                    |
-| `concurrency.perHost`          | `number`  | `1`                                 | Maximum number of simultaneous requests to any single host.                        |
-| `rateLimit.minDelayMs`         | `number`  | `500`                               | Minimum pause between requests to the same host (milliseconds).                    |
-| `rateLimit.maxDelayMs`         | `number`  | `2000`                              | Maximum pause (random jitter applied between min and max).                         |
-| `browser`                      | object    | —                                   | Playwright browser launch and context options. See table below.                    |
-| `schedule.intervalHours`       | `number`  | `24`                                | Hours between runs when using `npm run schedule`.                                  |
-| `login.interactive`            | `boolean` | `true`                              | Open a visible browser window when a login wall is detected.                       |
-| `login.waitTimeoutMs`          | `number`  | `600000`                            | Milliseconds to wait for you to complete login before timing out (default 10 min). |
-| `screenshot.onChange`          | `boolean` | `false`                             | Capture a screenshot of the page when content changes.                             |
-| `screenshot.dir`               | `string`  | `"screenshots"`                     | Directory where screenshots are saved (relative to cwd).                           |
-| `notifications.onlyChanges`    | `boolean` | `true`                              | Send notifications only when at least one selector changed.                        |
-| `notifications.email`          | object    | —                                   | SMTP email settings. Set `enabled: true` to activate.                              |
-| `notifications.webhooks`       | array     | `[]`                                | List of webhook endpoints (Slack, Discord, Teams, or generic JSON).                |
-| `notifications.telegram`       | object    | —                                   | Telegram bot settings. Set `enabled: true` to activate.                            |
-| `urls`                         | array     | —                                   | List of pages to monitor. See table below.                                         |
+| Key                              | Type       | Default                             | Description                                                                         |
+| -------------------------------- | ---------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| `databasePath`                   | `string`   | `"data/page-change-checker.sqlite"` | Path to the SQLite database file. Created automatically on first run.               |
+| `network.allowPrivateAddresses`  | `boolean`  | `false`                             | Permit private/reserved destinations. Enable only for intentional local monitoring. |
+| `network.allowedHosts`           | `string[]` | `[]`                                | Exact or `*.example.com` hosts allowed to bypass private-address blocking.          |
+| `normalize.trimWhitespace`       | `boolean`  | `true`                              | Strip leading/trailing whitespace from extracted content before comparing.          |
+| `normalize.collapseWhitespace`   | `boolean`  | `true`                              | Collapse runs of whitespace to a single space.                                      |
+| `normalize.caseInsensitive`      | `boolean`  | `false`                             | Lower-case content before comparing.                                                |
+| `retry.maxAttempts`              | `number`   | `3`                                 | Maximum number of scrape attempts per URL before giving up.                         |
+| `retry.baseDelayMs`              | `number`   | `1000`                              | Initial retry delay in milliseconds.                                                |
+| `retry.backoffFactor`            | `number`   | `2`                                 | Multiplier applied to delay on each successive retry (exponential backoff).         |
+| `retry.maxDelayMs`               | `number`   | `30000`                             | Upper bound for exponential retry delays.                                           |
+| `concurrency.global`             | `number`   | `3`                                 | Maximum number of URLs scraped simultaneously across all hosts.                     |
+| `concurrency.perHost`            | `number`   | `1`                                 | Maximum number of simultaneous requests to any single host.                         |
+| `rateLimit.minDelayMs`           | `number`   | `500`                               | Minimum pause between requests to the same host (milliseconds).                     |
+| `rateLimit.maxDelayMs`           | `number`   | `2000`                              | Maximum pause (random jitter applied between min and max).                          |
+| `browser`                        | object     | —                                   | Playwright browser launch and context options. See table below.                     |
+| `schedule.intervalHours`         | `number`   | `24`                                | Hours between runs when using `npm run schedule`.                                   |
+| `login.interactive`              | `boolean`  | `false`                             | Open a visible browser window when a login wall is detected.                        |
+| `login.waitTimeoutMs`            | `number`   | `600000`                            | Milliseconds to wait for you to complete login before timing out (default 10 min).  |
+| `screenshot.onChange`            | `boolean`  | `false`                             | Capture a screenshot of the page when content changes.                              |
+| `screenshot.dir`                 | `string`   | `"screenshots"`                     | Directory where screenshots are saved (relative to cwd).                            |
+| `notifications.onlyChanges`      | `boolean`  | `true`                              | Send notifications only when at least one selector changed.                         |
+| `notifications.contentMode`      | `string`   | `"summary"`                         | Send summary-only, truncated, or full monitored content.                            |
+| `notifications.maxPayloadLength` | `number`   | `1000000`                           | Maximum serialized bytes sent to one notification channel.                          |
+| `notifications.timeoutMs`        | `number`   | `10000`                             | Delivery timeout for HTTP, Telegram, and SMTP channels.                             |
+| `notifications.failOnError`      | `boolean`  | `false`                             | Fail the run after attempting all channels if any delivery fails.                   |
+| `notifications.email`            | object     | —                                   | SMTP email settings. Set `enabled: true` to activate.                               |
+| `notifications.webhooks`         | array      | `[]`                                | List of webhook endpoints (Slack, Discord, Teams, or generic JSON).                 |
+| `notifications.telegram`         | object     | —                                   | Telegram bot settings. Set `enabled: true` to activate.                             |
+| `urls`                           | array      | —                                   | List of pages to monitor. See table below.                                          |
 
 ### `browser` options
 
@@ -248,11 +297,12 @@ Copy `config.example.json` to `config.json` and edit it. The file is validated o
 | `headless`                      | `boolean`  | Run browser without a visible window. Set to `false` to debug page loading.                    |
 | `userDataDir`                   | `string`   | Path to the persistent Chromium profile directory. Stores cookies and local storage.           |
 | `timeoutMs`                     | `number`   | Navigation timeout in milliseconds.                                                            |
+| `maxContentLength`              | `number`   | Maximum extracted characters per selector before the observation is rejected.                  |
 | `waitUntil`                     | `string`   | Playwright navigation event: `"load"`, `"domcontentloaded"`, `"networkidle"`, or `"commit"`.   |
 | `userAgent`                     | `string`   | Browser user-agent string sent with every request.                                             |
 | `locale`                        | `string`   | Browser locale (e.g. `"de-DE"`). Affects `Accept-Language` and date formatting.                |
 | `timezoneId`                    | `string`   | IANA timezone (e.g. `"Europe/Berlin"`).                                                        |
-| `extraHTTPHeaders`              | object     | Additional HTTP headers added to every request.                                                |
+| `extraHTTPHeaders`              | object     | Additional headers sent only to the exact configured target origin.                            |
 | `cookieConsent.enabled`         | `boolean`  | Whether to attempt automatic cookie-consent banner dismissal.                                  |
 | `cookieConsent.timeoutMs`       | `number`   | How long to wait for a consent button to appear (milliseconds).                                |
 | `cookieConsent.buttonTextRegex` | `string`   | Regex matched against button text to identify accept buttons.                                  |
@@ -288,26 +338,44 @@ Copy `config.example.json` to `config.json` and edit it. The file is validated o
 
 ### `notifications` options
 
-| Key                                  | Type       | Default | Description                                                           |
-| ------------------------------------ | ---------- | ------- | --------------------------------------------------------------------- |
-| `notifications.onlyChanges`          | `boolean`  | `true`  | Send notifications only when at least one monitored selector changed. |
-| `notifications.email.enabled`        | `boolean`  | `false` | Activate email notifications.                                         |
-| `notifications.email.from`           | `string`   | —       | Sender address.                                                       |
-| `notifications.email.to`             | `string[]` | —       | Recipient addresses.                                                  |
-| `notifications.email.subject`        | `string`   | —       | Email subject line.                                                   |
-| `notifications.email.smtp.host`      | `string`   | —       | SMTP server hostname.                                                 |
-| `notifications.email.smtp.port`      | `number`   | —       | SMTP port (e.g. `587` for STARTTLS, `465` for SSL).                   |
-| `notifications.email.smtp.secure`    | `boolean`  | `false` | Use TLS from the start (set `true` for port 465).                     |
-| `notifications.email.smtp.auth.user` | `string`   | —       | SMTP username.                                                        |
-| `notifications.email.smtp.auth.pass` | `string`   | —       | SMTP password. Keep this out of version control.                      |
-| `notifications.webhooks[].enabled`   | `boolean`  | `false` | Activate this webhook endpoint.                                       |
-| `notifications.webhooks[].url`       | `string`   | —       | Webhook URL (Slack, Discord, Teams, or any HTTP endpoint).            |
-| `notifications.webhooks[].format`    | `string`   | —       | Payload format: `"slack"`, `"discord"`, `"teams"`, or `"generic"`.    |
-| `notifications.webhooks[].headers`   | `object`   | `{}`    | Extra HTTP headers (e.g. `Authorization: Bearer …`).                  |
-| `notifications.telegram.enabled`     | `boolean`  | `false` | Activate Telegram notifications.                                      |
-| `notifications.telegram.botToken`    | `string`   | —       | Telegram Bot API token.                                               |
-| `notifications.telegram.chatId`      | `string`   | —       | Target chat or channel ID (prefix with `-100` for channels).          |
-| `notifications.telegram.onlyChanges` | `boolean`  | `true`  | Override `onlyChanges` for Telegram only.                             |
+| Key                                  | Type       | Default     | Description                                                           |
+| ------------------------------------ | ---------- | ----------- | --------------------------------------------------------------------- |
+| `notifications.onlyChanges`          | `boolean`  | `true`      | Send notifications only when at least one monitored selector changed. |
+| `notifications.contentMode`          | `string`   | `"summary"` | `"summary"`, `"truncated"`, or `"full"` monitored content.            |
+| `notifications.maxContentLength`     | `number`   | `500`       | Per-field limit when `contentMode` is `"truncated"`.                  |
+| `notifications.maxPayloadLength`     | `number`   | `1000000`   | Maximum serialized bytes for email or webhook delivery.               |
+| `notifications.timeoutMs`            | `number`   | `10000`     | Network timeout for each channel.                                     |
+| `notifications.failOnError`          | `boolean`  | `false`     | Throw after all deliveries are attempted if any failed.               |
+| `notifications.email.enabled`        | `boolean`  | `false`     | Activate email notifications.                                         |
+| `notifications.email.from`           | `string`   | —           | Sender address.                                                       |
+| `notifications.email.to`             | `string[]` | —           | Recipient addresses.                                                  |
+| `notifications.email.subject`        | `string`   | —           | Email subject line.                                                   |
+| `notifications.email.smtp.host`      | `string`   | —           | SMTP server hostname.                                                 |
+| `notifications.email.smtp.port`      | `number`   | —           | SMTP port (e.g. `587` for STARTTLS, `465` for SSL).                   |
+| `notifications.email.smtp.secure`    | `boolean`  | `false`     | Use TLS from the start (set `true` for port 465).                     |
+| `notifications.email.smtp.auth.user` | `string`   | —           | SMTP username.                                                        |
+| `notifications.email.smtp.auth.pass` | `string`   | —           | SMTP password. Keep this out of version control.                      |
+| `notifications.webhooks[].enabled`   | `boolean`  | `false`     | Activate this webhook endpoint.                                       |
+| `notifications.webhooks[].url`       | `string`   | —           | Webhook URL (Slack, Discord, Teams, or any HTTP endpoint).            |
+| `notifications.webhooks[].format`    | `string`   | —           | Payload format: `"slack"`, `"discord"`, `"teams"`, or `"generic"`.    |
+| `notifications.webhooks[].headers`   | `object`   | `{}`        | Extra HTTP headers (e.g. `Authorization: Bearer …`).                  |
+| `notifications.telegram.enabled`     | `boolean`  | `false`     | Activate Telegram notifications.                                      |
+| `notifications.telegram.botToken`    | `string`   | —           | Telegram Bot API token.                                               |
+| `notifications.telegram.chatId`      | `string`   | —           | Target chat or channel ID (prefix with `-100` for channels).          |
+| `notifications.telegram.onlyChanges` | `boolean`  | `true`      | Override `onlyChanges` for Telegram only.                             |
+
+Any string value can reference one environment variable exactly. Missing variables fail validation:
+
+```json
+{
+  "auth": {
+    "user": "${PCC_SMTP_USER}",
+    "pass": "${PCC_SMTP_PASS}"
+  }
+}
+```
+
+Surrounding-string interpolation is intentionally not performed: `"Bearer ${TOKEN}"` remains literal. Put the complete value, including the `Bearer ` prefix, in the environment variable.
 
 ---
 
@@ -318,6 +386,8 @@ Set `schedule.intervalHours` in `config.json`, then:
 ```bash
 npm run schedule
 ```
+
+The scheduler runs immediately, prevents overlapping ticks, and cooperatively cancels active waits and browser contexts on `SIGINT`/`SIGTERM`. A process lock next to the database prevents a second CLI or container instance from mutating the same SQLite state.
 
 For persistent operation, wrap this in your OS process manager:
 
@@ -368,12 +438,14 @@ Register-ScheduledTask -TaskName "PageChangeChecker" -Action $action -Trigger $t
 If a page requires login:
 
 1. Add `loginChecks` selectors to the URL entry in `config.json` — elements that only exist when you are logged in (e.g. an avatar or username element).
-2. Set `login.interactive` to `true`.
+2. Set `browser.headless` to `false`, `login.interactive` to `true`, and keep `concurrency.perHost` at `1`. The config validator enforces these invariants.
 3. On the first run, if the login checks are missing, a **visible** Chromium window opens for that host.
 4. Log in normally in that window. The scraper detects the login check selector appearing and continues automatically.
-5. The session (cookies, local storage) is saved to `data/user-data` and reused on every subsequent run.
+5. The session (cookies, local storage) is saved in an origin-specific directory under `data/user-data` and reused on subsequent runs.
 
 Set `login.waitTimeoutMs` to control how long the tool waits before giving up (default: 10 minutes).
+
+If upgrading from a version that used one shared profile directory, log in once per origin again; origin separation is deliberate credential isolation.
 
 ---
 
@@ -391,10 +463,11 @@ src/
     scraper.ts     Playwright orchestration, retry, concurrency, rate limiting
     pageReader.ts  Low-level DOM extraction via Playwright
   storage/
-    db.ts          SQLite helpers (open, migrate, seed, snapshots, resolveUrls)
+    db.ts          SQLite migrations, consistent backups, reconciliation, atomic commits
   reporting/
     reporter.ts    Formats results as a human-readable diff report
   notifications/
+    content.ts     Third-party payload minimization
     index.ts       Orchestrates all notification channels
     email.ts       SMTP email via nodemailer
     webhook.ts     HTTP webhooks (Slack, Discord, Teams, generic JSON)
@@ -402,11 +475,15 @@ src/
   core/
     types.ts       Shared TypeScript interfaces
     errors.ts      Structured error types (NavigationTimeout, Http, SelectorMissing…)
+    fileLock.ts    Stale-aware cross-process lock
+    logger.ts      Correlated structured logs with redaction
+    networkPolicy.ts Outbound host/IP policy
     normalize.ts   Text normalisation and ignore-pattern logic
+    redact.ts      URL, error, and structured-field sanitization
 tests/
-  unit/          Vitest unit tests (config, pageReader, reporter)
-  integration/   Vitest integration tests (db)
-  e2e/           Playwright E2E tests (scraper against a local HTML fixture)
+  unit/          Validation, policy, lock, redaction, reporting, and channel tests
+  integration/   SQLite and real-Chromium security scenarios under V8 coverage
+  e2e/           The same adversarial Chromium scenarios under Playwright
 docs/
   architecture.md  Module diagram and data flow
   configuration.md Full config reference
@@ -430,8 +507,9 @@ See [docs/architecture.md](docs/architecture.md) for the full module diagram.
 | `npm run test`          | Vitest unit + integration tests                             |
 | `npm run test:coverage` | Vitest with V8 coverage                                     |
 | `npm run test:e2e`      | Playwright E2E tests                                        |
+| `npm run audit:prod`    | Fail on high/critical production dependency vulnerabilities |
 | `npm run verify:static` | Lint + format check + build                                 |
-| `npm run verify`        | Full pipeline: static + coverage + E2E                      |
+| `npm run verify`        | Audit + static checks + coverage + E2E                      |
 
 ### Git hooks (Husky)
 
@@ -464,6 +542,8 @@ npm run test:e2e
 npm run verify
 ```
 
+The browser suite explicitly proves that logged-out pages, HTTP 500 responses, malformed later selectors, and oversized content cannot advance baselines, and that an `Authorization` header never crosses to a third-party origin. Coverage includes `src/browser/scraper.ts`; it is not hidden behind a coverage exclusion.
+
 ---
 
 ## Demo scope
@@ -483,12 +563,13 @@ Notifications (email, webhooks, Telegram) are included, but they are opt-in and 
 
 ## Limitations
 
-- **Notifications are best-effort** — email, webhook, and Telegram delivery errors are logged but do not abort the scrape run. For critical alerting, treat the console output as the authoritative record and use notifications as a convenience layer.
-- **Single machine** — there is no distributed queue or worker pool. One Chromium process runs all URLs sequentially.
+- **Notifications default to best-effort** — set `notifications.failOnError: true` when delivery failure must fail the run. The console/JSON report remains the authoritative local result.
+- **Single machine** — there is no distributed queue or worker pool. Work is bounded by global and per-origin concurrency, and one process lock owns a database at a time.
 - **No scheduling persistence** — if the process restarts, the interval timer resets. Use a real OS scheduler (systemd, launchd, Task Scheduler) for reliability.
 - **CSS selectors can break** — if a site redesigns its DOM, selectors need to be updated manually. There is no automatic selector healing.
 - **Login automation is manual** — the interactive login flow requires a human to log in once. Automated form-filling is not supported by design (avoids credentials in config files).
-- **No rendering timeout per selector** — if a page never finishes loading, the navigation timeout (`browser.timeoutMs`) applies but there is no per-selector wait strategy beyond what Playwright's `waitUntil` provides.
+- **Application-layer egress guard** — the host/IP policy materially reduces SSRF risk, but high-assurance deployments should also enforce firewall or container-network egress allowlists to mitigate DNS rebinding and browser/runtime defects.
+- **Regexes are operator supplied** — patterns are length-limited, syntax-checked, and screened for common catastrophic forms, but complex regular expressions should still be reviewed.
 - **SQLite only** — the snapshot store is a local SQLite file. There is no support for Postgres, MySQL, or any remote store.
 
 ---

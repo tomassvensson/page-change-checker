@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    fileParallelism: false,
     include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**', '.trunk/**'],
     coverage: {
@@ -24,10 +25,7 @@ export default defineConfig({
         'vitest.config.ts',
         'src/index.ts',
         'src/cli/index.ts',
-        'src/cli/scheduler.ts',
-        'src/browser/scraper.ts',
         'src/core/types.ts',
-        'src/core/errors.ts',
         'src/scheduler.ts',
         'src/scraper.ts',
         'src/types.ts',

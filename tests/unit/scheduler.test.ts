@@ -1,6 +1,7 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 
 import { runForever } from '../../src/cli/scheduler.js';
+import { log } from '../../src/core/logger.js';
 import type { AppConfig } from '../../src/core/types.js';
 
 // AG: scheduler overlap prevention tests
@@ -77,7 +78,7 @@ describe('runForever', () => {
       return Promise.resolve();
     });
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
 
     void runForever(makeConfig(1), task);
     await flushMicrotasks(); // first (immediate) call completes; setInterval registered
@@ -90,26 +91,68 @@ describe('runForever', () => {
     intervalCb!();
     await flushMicrotasks();
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('skipping this tick'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      'previous run is still in progress; skipping scheduler tick',
+      expect.objectContaining({ intervalHours: 1 })
+    );
     expect(task).toHaveBeenCalledTimes(2); // third call was skipped
 
     // Clean up: resolve the hanging task so no floating promises remain.
     resolveHanging();
     await flushMicrotasks();
   });
+
+  it('clears future ticks and waits for an active run during shutdown', async () => {
+    let intervalCb: (() => void) | null = null;
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((fn: TimerHandler) => {
+      intervalCb = fn as () => void;
+      return 123 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
+
+    let callCount = 0;
+    let resolveHanging!: () => void;
+    const hangingTask = new Promise<void>((resolveTask) => {
+      resolveHanging = resolveTask;
+    });
+    const task = vi.fn().mockImplementation(() => {
+      callCount++;
+      return callCount === 1 ? Promise.resolve() : hangingTask;
+    });
+    const controller = new AbortController();
+    let stopped = false;
+    const runner = runForever(makeConfig(1), task, controller.signal).then(() => {
+      stopped = true;
+    });
+
+    await flushMicrotasks();
+    intervalCb!();
+    await flushMicrotasks();
+    controller.abort();
+    await flushMicrotasks();
+
+    expect(clearSpy).toHaveBeenCalledWith(123);
+    expect(stopped).toBe(false);
+
+    resolveHanging();
+    await runner;
+    expect(stopped).toBe(true);
+  });
 });
 
 function makeConfig(intervalHours: number): AppConfig {
   return {
     databasePath: 'unused.sqlite',
+    network: { allowPrivateAddresses: false, allowedHosts: [] },
     normalize: { trimWhitespace: true, collapseWhitespace: true, caseInsensitive: false },
-    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1 },
+    retry: { maxAttempts: 1, baseDelayMs: 0, backoffFactor: 1, maxDelayMs: 0 },
     concurrency: { global: 1, perHost: 1 },
     rateLimit: { minDelayMs: 0, maxDelayMs: 0 },
     browser: {
       headless: true,
       userDataDir: 'unused',
       timeoutMs: 1000,
+      maxContentLength: 2_000_000,
       waitUntil: 'domcontentloaded',
       userAgent: 'test',
       locale: 'de-DE',
