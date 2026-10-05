@@ -91,6 +91,14 @@ Old validated success remains visible even outside the current digest window.
 
 ## Quiet desktop operation
 
+For text-only alerts, use `visibleTextSnapshot` scoped to the required container.
+Set `normalizeWhitespace: true` to ignore spacing, tabs and line-break changes
+caused by layout. Screenshots remain evidence, not the alert signal. This mode
+intentionally ignores images, colors, link destinations and input values that
+are not visible text. Text additions, removals and number changes still alert;
+authentication and required-element failures remain diagnostics. Changing modes
+establishes a new validated baseline rather than comparing unlike evidence.
+
 The local Windows runner defaults to no desktop popups and no automatic report
 opening. In private `settings.json`, `showDesktopNotifications` controls normal
 and watchdog popups; `openReportOnNotification` independently controls opening

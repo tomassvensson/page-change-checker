@@ -63,6 +63,7 @@ export const ruleSchema = z.discriminatedUnion('kind', [
     ...captureFields,
     kind: z.literal('visibleTextSnapshot'),
     selector: z.string().min(1),
+    normalizeWhitespace: z.boolean().optional(),
     ignoredLines: z.array(z.string()).optional()
   }),
   z.strictObject({
@@ -233,14 +234,14 @@ function inputValue(
   }
   if (input?.value === undefined && !input?.signature)
     return { error: 'Required rule input was not captured.' };
-  if (rule.kind === 'visibleTextSnapshot' && input.value !== undefined)
-    return {
-      value: input.value
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l && !rule.ignoredLines?.includes(l))
-        .join('\n')
-    };
+  if (rule.kind === 'visibleTextSnapshot' && input.value !== undefined) {
+    const value = input.value
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !rule.ignoredLines?.includes(l))
+      .join('\n');
+    return { value: rule.normalizeWhitespace ? value.replace(/\s+/g, ' ').trim() : value };
+  }
   return input;
 }
 

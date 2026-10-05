@@ -36,6 +36,35 @@ const signature = (n = 0): Signature => ({
   pixels: Buffer.alloc(48, n).toString('base64')
 });
 describe('shared production rule decisions', () => {
+  it('optionally ignores whitespace rendering while still detecting text changes', () => {
+    const textRule: MonitorRule = { ...rule, normalizeWhitespace: true };
+    const baseline = acceptedObservations(
+      confirmEvidence([textRule], evidence('Math\t2\nScience 1'), evidence('Math 2 Science 1'))
+    );
+    expect(baseline.r).toBeDefined();
+    expect(
+      confirmEvidence(
+        [textRule],
+        evidence('Math  2\n\nScience\u00a01'),
+        evidence('Math 2 Science 1'),
+        baseline
+      )[0].changed
+    ).toBe(false);
+    expect(
+      confirmEvidence(
+        [textRule],
+        evidence('Math 1 Science 1'),
+        evidence('Math\t1\nScience 1'),
+        baseline
+      )[0].changed
+    ).toBe(true);
+    const old = acceptedObservations(
+      confirmEvidence([rule], evidence('Math\n2'), evidence('Math\n2'))
+    );
+    expect(
+      confirmEvidence([textRule], evidence('Math 2'), evidence('Math 2'), old)[0].rebaselined
+    ).toBe(true);
+  });
   it('explains keyed semantic row changes without affecting legacy text comparisons', () => {
     const table: MonitorRule = { ...rule, kind: 'selectorContentSnapshot' };
     const ev = (value: string) => evidence(value);
