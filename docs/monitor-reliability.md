@@ -89,6 +89,21 @@ The append-only journal retains text/input observations and baseline definitions
 image/bundle expiry is not a promise to erase those permanent audit records.
 Old validated success remains visible even outside the current digest window.
 
+## Quiet desktop operation
+
+The local Windows runner defaults to no desktop popups and no automatic report
+opening. In private `settings.json`, `showDesktopNotifications` controls normal
+and watchdog popups; `openReportOnNotification` independently controls opening
+reports after an event. Both default to `false` and require explicit `true` to
+opt in. Missing or unreadable settings must not enable desktop actions. The
+runner reads these settings at display time so stale notification files cannot
+override them. `-DoNotOpenReport` still overrides report opening.
+
+Keep `headless: true` for invisible background website checks. Email delivery,
+daily digests, evidence capture and health monitoring are unaffected by desktop
+preferences. Explicit manual login/bootstrap commands can still open a browser;
+ordinary checks do not automatically start an interactive login session.
+
 ## Verification
 
 Run `npm run verify`. Synthetic scenarios exercise the deployed coordinator and
