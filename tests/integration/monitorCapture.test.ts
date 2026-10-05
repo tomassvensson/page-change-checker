@@ -31,6 +31,31 @@ const rule: MonitorRule = {
   message: 'Changed'
 };
 describe('actual production browser orchestration', () => {
+  it('ignores repaint, layout, link and form-only changes in text-only mode', async () => {
+    const textRule: MonitorRule = { ...rule, normalizeWhitespace: true };
+    let variant = 0;
+    const options = {
+      navigate: async () => {
+        await page.setContent(
+          `<title>Account</title><main style="color:${variant ? 'red' : 'black'};font-size:${variant ? 24 : 14}px"><span style="display:${variant ? 'block' : 'inline'}">Math</span> <span>${variant === 2 ? '1' : '2'}</span><a href="/report-${variant}">Report</a><input value="${variant}"></main>`
+        );
+        return 200;
+      },
+      authenticate: () => null,
+      confirmationWaitMs: 1
+    };
+    const initial = await runRuleCheck(page, [textRule], {}, options);
+    expect(initial.confirmedAll).toBe(true);
+    variant = 1;
+    const repaint = await runRuleCheck(page, [textRule], initial.observations, options);
+    expect(repaint.confirmedAll).toBe(true);
+    expect(repaint.changed).toBe(false);
+    expect(repaint.screenshot).toBeDefined();
+    variant = 2;
+    const real = await runRuleCheck(page, [textRule], repaint.observations, options);
+    expect(real.confirmedAll).toBe(true);
+    expect(real.changed).toBe(true);
+  });
   it('recaptures once after a lazy update and rejects a continually inconsistent page', async () => {
     await page.setContent('<title>Account</title><main>A</main>');
     const original = page.screenshot.bind(page);
