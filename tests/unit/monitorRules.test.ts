@@ -223,7 +223,23 @@ describe('shared production rule decisions', () => {
       targets: [{ id: 'example', label: 'Example', url: 'https://example.com', rules: [rule] }]
     };
     expect(monitorSettingsSchema.safeParse(config).success).toBe(true);
+    const quiet = monitorSettingsSchema.parse(config);
+    expect(quiet.showDesktopNotifications).toBe(false);
+    expect(quiet.openReportOnNotification).toBe(false);
+    for (const showDesktopNotifications of [false, true]) {
+      for (const openReportOnNotification of [false, true]) {
+        const settings = monitorSettingsSchema.parse({
+          ...config,
+          showDesktopNotifications,
+          openReportOnNotification
+        });
+        expect(settings.showDesktopNotifications).toBe(showDesktopNotifications);
+        expect(settings.openReportOnNotification).toBe(openReportOnNotification);
+      }
+    }
     for (const bad of [
+      { ...config, showDesktopNotifications: 'false' },
+      { ...config, openReportOnNotification: 'false' },
       { ...config, typo: true },
       { ...config, targets: [config.targets[0], config.targets[0]] },
       { ...config, targets: [{ ...config.targets[0], url: 'https://user:password@example.com' }] },
