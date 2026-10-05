@@ -1,5 +1,9 @@
 {
   "databasePath": "data/page-change-checker.sqlite",
+  "network": {
+    "allowPrivateAddresses": false,
+    "allowedHosts": []
+  },
   "normalize": {
     "trimWhitespace": true,
     "collapseWhitespace": true,
@@ -8,7 +12,8 @@
   "retry": {
     "maxAttempts": 3,
     "baseDelayMs": 1000,
-    "backoffFactor": 2
+    "backoffFactor": 2,
+    "maxDelayMs": 30000
   },
   "concurrency": {
     "global": 3,
@@ -22,6 +27,7 @@
     "headless": true,
     "userDataDir": "data/user-data",
     "timeoutMs": 30000,
+    "maxContentLength": 2000000,
     "waitUntil": "domcontentloaded",
     "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
     "locale": "de-DE",
@@ -34,80 +40,34 @@
       "height": 900
     },
     "cookieConsent": {
-      "enabled": true,
+      "enabled": false,
       "timeoutMs": 3000,
       "buttonTextRegex": "^(Alle akzeptieren|Akzeptieren|Zustimmen|Einverstanden|Accept all|Accept|I agree|Agree)$",
-      "cssSelectors": [
-        "#onetrust-accept-btn-handler",
-        "button[id*=\"accept\"]",
-        "button[class*=\"accept\"]",
-        "[data-testid*=\"accept\"]",
-        "[aria-label*=\"accept\"]"
-      ]
+      "cssSelectors": ["#onetrust-accept-btn-handler"]
     }
   },
   "schedule": {
     "intervalHours": 24
   },
   "login": {
-    "interactive": true,
+    "interactive": false,
     "waitTimeoutMs": 600000
   },
   "screenshot": {
     "onChange": true,
-    "dir": "screenshots"
+    "dir": "screenshots",
+    "mode": "page",
+    "maxAgeDays": 30,
+    "maxCount": 100
   },
   "notifications": {
     "onlyChanges": true,
-    "email": {
-      "enabled": false,
-      "from": "alerts@example.com",
-      "to": ["you@example.com"],
-      "subject": "[page-change-checker] Change detected",
-      "smtp": {
-        "host": "smtp.example.com",
-        "port": 587,
-        "secure": false,
-        "auth": {
-          "user": "alerts@example.com",
-          "pass": "changeme"
-        }
-      }
-    },
-    "webhooks": [
-      {
-        "enabled": false,
-        "url": "https://hooks.slack.com/services/T000/B000/xxxx",
-        "format": "slack",
-        "headers": {}
-      },
-      {
-        "enabled": false,
-        "url": "https://discord.com/api/webhooks/1234/xxxx",
-        "format": "discord",
-        "headers": {}
-      },
-      {
-        "enabled": false,
-        "url": "https://outlook.office.com/webhook/xxxx/IncomingWebhook/yyyy/zzzz",
-        "format": "teams",
-        "headers": {}
-      },
-      {
-        "enabled": false,
-        "url": "https://your-server.example.com/hook",
-        "format": "generic",
-        "headers": {
-          "Authorization": "Bearer your-token"
-        }
-      }
-    ],
-    "telegram": {
-      "enabled": false,
-      "botToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-      "chatId": "-1001234567890",
-      "onlyChanges": true
-    }
+    "contentMode": "summary",
+    "maxContentLength": 500,
+    "maxPayloadLength": 1000000,
+    "timeoutMs": 10000,
+    "failOnError": false,
+    "webhooks": []
   },
   "urls": [
     {

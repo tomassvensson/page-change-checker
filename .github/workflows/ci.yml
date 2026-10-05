@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -13,20 +20,24 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
+        env:
+          HUSKY: 0
         run: npm ci
 
       - name: Install Chromium
@@ -36,16 +47,23 @@ jobs:
         run: npm run verify
 
       - name: Run SonarQube Cloud scan
-        if: env.SONAR_TOKEN != ''
+        timeout-minutes: 10
         uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
 
   yaml-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate YAML files
         run: |
@@ -55,14 +73,98 @@ jobs:
             | grep -v coverage \
             | xargs -I{} sh -c 'python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" {} && echo "OK: {}" || exit 1'
 
-  docker:
-    runs-on: ubuntu-latest
+  windows-reliability:
+    runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        env:
+          HUSKY: 0
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Install Chromium for production-path regressions
+        run: npx playwright install chromium
+      - name: Exercise native persistence and reliability policies
+        run: >-
+          npx vitest run monitorJournal monitorHistory monitorReplay monitorVisual
+          monitorHealth fileLock monitorOperations monitorRules monitorDelivery
+          monitorCoordinator monitorActivity monitorCapture cliDurability
+
+  postgres-reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: synthetic-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Install dependencies
+        env:
+          HUSKY: 0
+        run: npm ci
+      - name: Exercise PostgreSQL rollback and retry
+        env:
+          PCC_TEST_PSQL: psql
+          PGPASSWORD: synthetic-ci-only
+        run: npx vitest run tests/integration/monitorPostgres.test.ts
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate docker-compose config
         run: docker compose config --quiet
 
       - name: Build Docker image
         run: docker build --tag page-change-checker:ci .
+
+      - name: Verify non-root runtime and CLI startup
+        run: |
+          test "$(docker run --rm --entrypoint id page-change-checker:ci -u)" = "1000"
+          docker run --rm page-change-checker:ci --version
+
+      - name: Launch persistent Chromium under hardened runtime
+        run: >-
+          docker run --rm
+          --read-only
+          --cap-drop ALL
+          --security-opt no-new-privileges
+          --shm-size 1g
+          --tmpfs /tmp:rw,noexec,nosuid,size=256m
+          --tmpfs /home/node/.cache:rw,noexec,nosuid,size=128m
+          --tmpfs /home/node/.config:rw,noexec,nosuid,size=16m
+          --entrypoint node
+          page-change-checker:ci
+          --input-type=module
+          -e "import { chromium } from 'playwright'; const context = await chromium.launchPersistentContext('/tmp/profile', { headless: true }); const page = await context.newPage(); await page.goto('data:text/html,<h1>ok</h1>'); if (await page.textContent('h1') !== 'ok') process.exit(1); await context.close();"
