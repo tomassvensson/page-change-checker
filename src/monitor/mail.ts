@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
+import { diffLines, diffWordsWithSpace } from 'diff';
+
 import { dailyDiagnostics, dayKey } from './journal.js';
 import type { CheckRecord, MonitorJournal } from './journal.js';
 import { periodSummary, renderPeriodSummary } from './period.js';
@@ -20,7 +22,7 @@ export interface EvidenceResult {
   alerts?: {
     message: string;
     observed: string;
-    textDiff?: { oldText: string; newText: string };
+    textDiff?: { oldText: string | null; newText: string };
     rowChanges?: unknown;
   }[];
   screenshotPath?: string | null;
@@ -35,6 +37,7 @@ export interface FrozenMail {
   attachments: { filename: string; cid: string; content: string; contentType: string }[];
   dailyDate: string | null;
   cutoff: string;
+  fullCoverage: boolean;
 }
 const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const escape = (v: string | number | null | undefined) =>
@@ -42,6 +45,62 @@ const escape = (v: string | number | null | undefined) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
   );
+
+export function renderTextChangeDiff(oldText: string | null | undefined, newText: string) {
+  const rows: { text: string; html: string }[] = [];
+  const parts = diffLines(oldText ?? '', newText);
+  const addLineRows = (value: string, sign: '+' | '-') => {
+    const normalized = value.replace(/\r\n/g, '\n').replace(/\n$/, '');
+    for (const line of normalized.split('\n'))
+      rows.push({
+        text: `${sign} ${line}`,
+        html: `<span style="display:block;background:${sign === '+' ? '#dcfce7' : '#fee2e2'};color:${sign === '+' ? '#14532d' : '#7f1d1d'}">${sign} ${escape(line)}</span>`
+      });
+  };
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.removed && parts[i + 1]?.added) {
+      const before = part.value.replace(/\r\n/g, '\n');
+      const after = parts[i + 1].value.replace(/\r\n/g, '\n');
+      if (Math.max(before.length, after.length) > 160) {
+        const words = diffWordsWithSpace(before, after);
+        const context = (value: string, index: number) => {
+          if (value.length <= 80) return value;
+          if (index === 0) return `…${value.slice(-40)}`;
+          if (index === words.length - 1) return `${value.slice(0, 40)}…`;
+          return `${value.slice(0, 35)}…${value.slice(-35)}`;
+        };
+        rows.push({
+          text: words
+            .map((word, index) =>
+              word.added
+                ? `{+${word.value}+}`
+                : word.removed
+                  ? `[-${word.value}-]`
+                  : context(word.value, index)
+            )
+            .join(''),
+          html: `<span style="display:block">${words
+            .map((word, index) => {
+              if (word.added)
+                return `<ins style="background:#dcfce7;color:#14532d;text-decoration:none">${escape(word.value)}</ins>`;
+              if (word.removed)
+                return `<del style="background:#fee2e2;color:#7f1d1d">${escape(word.value)}</del>`;
+              return escape(context(word.value, index));
+            })
+            .join('')}</span>`
+        });
+        i++;
+        continue;
+      }
+    }
+    if (part.added || part.removed) addLineRows(part.value, part.added ? '+' : '-');
+  }
+  return {
+    text: rows.map((row) => row.text).join('\n'),
+    html: `<pre style="white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;color:#172033;padding:10px">${rows.map((row) => row.html).join('')}</pre>`
+  };
+}
 
 /** Shared production email assembly: recovered events, complete coverage, frozen
  * labelled inline evidence and one independently acknowledged recipient each. */
@@ -94,15 +153,33 @@ export function projectMonitorMail(
     ).values()
   ];
   const attachments: FrozenMail['attachments'] = [];
+  const contentKeys = new Set(
+    events.map((e) => {
+      const r = e.payload as EvidenceResult;
+      return `${r.id}:${r.evidenceId ?? r.checkedAt}`;
+    })
+  );
+  const isContentChange = (r: EvidenceResult) =>
+    contentKeys.has(`${r.id}:${r.evidenceId ?? r.checkedAt}`);
   const conditionText = (result: EvidenceResult) =>
     (result.alerts ?? [])
-      .map(
-        (a) =>
-          `${a.message}: ${a.observed}${a.textDiff ? `\nPrevious:\n${a.textDiff.oldText}\nCurrent:\n${a.textDiff.newText}` : ''}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`
+      .map((a) =>
+        a.textDiff
+          ? renderTextChangeDiff(a.textDiff.oldText, a.textDiff.newText).text
+          : `${a.message}: ${a.observed}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`
       )
       .join('\n');
+  const conditionHtml = (result: EvidenceResult) =>
+    (result.alerts ?? [])
+      .map((a) =>
+        a.textDiff
+          ? renderTextChangeDiff(a.textDiff.oldText, a.textDiff.newText).html
+          : `<pre>${escape(`${a.message}: ${a.observed}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`)}</pre>`
+      )
+      .join('');
   const details = selected
     .map((result) => {
+      const changed = isContentChange(result);
       const imageHtml = [result.screenshotPath, result.diffScreenshotPath]
         .map((path, index) => {
           if (!path || !existsSync(path))
@@ -115,10 +192,10 @@ export function projectMonitorMail(
               content: readFileSync(path).toString('base64'),
               contentType: 'image/png'
             });
-          return `<p>${index ? 'Marked changes (original is separate)' : 'Original screenshot'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${index ? 'changes' : 'original'}" style="max-width:100%"></a>`;
+          return `<p>${changed ? (index ? 'Marked changes (original is separate)' : 'Original screenshot') : 'Diagnostic screenshot — failed or incomplete check, not a page change'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${changed ? (index ? 'changes' : 'original') : 'diagnostic'}" style="max-width:100%"></a>`;
         })
         .join('');
-      return `<h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p><pre>${escape(conditionText(result))}</pre>${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><pre>${escape(result.text ?? '')}</pre>`;
+      return `<h2>${changed ? 'Confirmed page change' : 'Check diagnostic — no page change confirmed'}</h2><h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p>${conditionHtml(result)}${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><p>Captured page text</p><pre>${escape(result.text ?? '')}</pre>`;
     })
     .join('');
   const metrics = journal.queueHealth(options.now);
@@ -131,40 +208,51 @@ export function projectMonitorMail(
   const storageHtml = failures.length
     ? `<h2>Retained history-storage diagnostics</h2><table border="1"><tr><th>Sample</th><th>Time</th><th>Outcome</th><th>Recovery</th></tr>${failures.map((s) => `<tr><td>${escape(s.sample)}</td><td>${escape(s.at)}</td><td>${escape(s.detail)}</td><td>${storage.some((later) => later.sample === s.sample && later.at > s.at && later.outcome === 'committed') ? 'Recovered' : 'Pending / needs investigation'}</td></tr>`).join('')}</table>`
     : '';
-  const html = `<html><body>${renderPeriodSummary(summaries, options.now)}<p>Unsent messages: ${metrics.pending}; quarantined: ${metrics.quarantined}; history backlog: ${metrics.historyBacklog}</p>${storageHtml}${details}</body></html>`;
-  let portableHtml = html;
-  for (const image of attachments)
-    portableHtml = portableHtml.replaceAll(
-      `cid:${image.cid}`,
-      `data:${image.contentType};base64,${image.content}`
-    );
+  const coverageHtml = `${renderPeriodSummary(summaries, options.now)}<p>Unsent messages: ${metrics.pending}; quarantined: ${metrics.quarantined}; history backlog: ${metrics.historyBacklog}</p>${storageHtml}`;
+  const coverageText = summaries
+    .map(
+      (r) =>
+        `${r.title}\n${r.url}\n${r.outcome}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered)' : ''}`).join('\n')}`
+    )
+    .join('\n\n');
+  const detailsText = selected
+    .map(
+      (r) =>
+        `${isContentChange(r) ? 'Confirmed page change' : 'Check diagnostic — no page change confirmed'}\n${r.title ?? r.label}\n${r.url}\n${conditionText(r)}\n${r.error ?? r.warnings?.join('; ') ?? ''}\nCaptured page text:\n${r.text ?? ''}`
+    )
+    .join('\n\n');
   journal.projectDestinations(
-    options.recipients.map((recipient, index) => ({
-      id: ids[index],
-      eventIds: events.map((e) => e.id),
-      payload: {
-        subject: `${options.subjectPrefix} — ${options.dailyDate ?? 'confirmed change'}`,
-        html,
-        portableHtml,
-        text:
-          summaries
-            .map(
-              (r) =>
-                `${r.title}\n${r.url}\n${r.outcome}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered)' : ''}`).join('\n')}`
-            )
-            .join('\n\n') +
-          selected
-            .map(
-              (r) =>
-                `\n\n${r.title ?? r.label}\n${r.url}\n${conditionText(r)}\n${r.error ?? r.warnings?.join('; ') ?? ''}\nCaptured page text:\n${r.text ?? ''}`
-            )
-            .join(''),
-        recipient,
-        attachments,
-        dailyDate: options.dailyDate ?? null,
-        cutoff: options.now
-      } satisfies FrozenMail
-    })),
+    options.recipients.map((recipient, index) => {
+      const fullCoverage =
+        Boolean(options.dailyDate) ||
+        !journal.latestFullReportDelivery(
+          recipient,
+          new Date(Date.parse(options.now) - 36 * 3600000).toISOString(),
+          options.now
+        );
+      const html = `<html><body>${details}${fullCoverage ? coverageHtml : ''}</body></html>`;
+      let portableHtml = html;
+      for (const image of attachments)
+        portableHtml = portableHtml.replaceAll(
+          `cid:${image.cid}`,
+          `data:${image.contentType};base64,${image.content}`
+        );
+      return {
+        id: ids[index],
+        eventIds: events.map((e) => e.id),
+        payload: {
+          subject: `${options.subjectPrefix} — ${options.dailyDate ?? 'confirmed change'}`,
+          html,
+          portableHtml,
+          text: [detailsText, fullCoverage ? coverageText : ''].filter(Boolean).join('\n\n'),
+          recipient,
+          attachments,
+          dailyDate: options.dailyDate ?? null,
+          cutoff: options.now,
+          fullCoverage
+        } satisfies FrozenMail
+      };
+    }),
     'email',
     options.now
   );

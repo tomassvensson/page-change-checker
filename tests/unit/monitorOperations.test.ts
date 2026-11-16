@@ -10,7 +10,11 @@ import { EvidenceStore } from '../../src/monitor/evidence.js';
 import { coverageDegradation, sendHeartbeat } from '../../src/monitor/health.js';
 import { MonitorJournal } from '../../src/monitor/journal.js';
 import type { CheckRecord } from '../../src/monitor/journal.js';
-import { projectMonitorMail, verifyAcceptance } from '../../src/monitor/mail.js';
+import {
+  projectMonitorMail,
+  renderTextChangeDiff,
+  verifyAcceptance
+} from '../../src/monitor/mail.js';
 import type { FrozenMail } from '../../src/monitor/mail.js';
 import { periodSummary, renderPeriodSummary } from '../../src/monitor/period.js';
 
@@ -298,6 +302,176 @@ describe('period, archival, health and production email assembly', () => {
       expect(projectMonitorMail(journal, options)).toBe(0);
       expect(projectMonitorMail(journal, { ...options, dailyDate: '2026-10-01' })).toBe(2);
       expect(projectMonitorMail(journal, { ...options, dailyDate: '2026-10-01' })).toBe(0);
+    } finally {
+      journal.close();
+    }
+  });
+  it('puts a colored text diff before coverage without repeating full old and new snapshots', () => {
+    const journal = new MonitorJournal(':memory:');
+    try {
+      journal.record(sample(), [
+        {
+          id: 'text-change',
+          target: 'example',
+          at: '2026-10-01T06:01:00Z',
+          kind: 'content',
+          payload: {
+            ...(sample().payload as object),
+            status: 'alert',
+            text: 'Captured page text',
+            alerts: [
+              {
+                message: 'Visible text',
+                observed: 'Changed',
+                textDiff: { oldText: 'Same\nOld <row>', newText: 'Same\nNew & row' }
+              }
+            ]
+          }
+        }
+      ]);
+      expect(
+        projectMonitorMail(journal, {
+          targets: [{ id: 'example', label: 'Example', url: 'https://example.com' }],
+          checks: [sample()],
+          recipients: ['one@example.com'],
+          subjectPrefix: 'Monitor',
+          since: '2026-10-01T00:00:00Z',
+          now: '2026-10-01T10:00:00Z',
+          sendEvents: true
+        })
+      ).toBe(1);
+      const mail = JSON.parse(journal.pending()[0].payload) as FrozenMail;
+      expect(mail.fullCoverage).toBe(true);
+      expect(mail.html).toContain('- Old &lt;row&gt;');
+      expect(mail.html).toContain('+ New &amp; row');
+      expect(mail.html).toContain('background:#fee2e2');
+      expect(mail.html).toContain('background:#dcfce7');
+      expect(mail.html.indexOf('+ New &amp; row')).toBeLessThan(
+        mail.html.indexOf('Complete reporting-period coverage')
+      );
+      expect(mail.html.indexOf('Complete reporting-period coverage')).toBeLessThan(
+        mail.html.indexOf('Retained diagnostics')
+      );
+      expect(mail.html).not.toContain('Previous:');
+      expect(mail.html).not.toContain('Current:');
+      expect(mail.html).not.toContain('Visible text');
+      expect(mail.text).toContain('- Old <row>\n+ New & row');
+      expect(mail.text.indexOf('+ New & row')).toBeLessThan(mail.text.indexOf('successful 1'));
+    } finally {
+      journal.close();
+    }
+  });
+  it('highlights changed words rather than repeating an entire long line', () => {
+    const prefix = 'Unchanged introduction. '.repeat(20);
+    const middle = 'Unchanged middle section. '.repeat(20);
+    const suffix = 'Unchanged ending. '.repeat(20);
+    const oldText = `${prefix}Status inactive; ${middle}Count 5; ${suffix}`;
+    const newText = `${prefix}Status active; ${middle}Count 6; ${suffix}`;
+    const diff = renderTextChangeDiff(oldText, newText);
+    expect(diff.text).toContain('[-inactive-]{+active+}');
+    expect(diff.text).toContain('[-5-]{+6+}');
+    expect(diff.text).not.toContain(prefix);
+    expect(diff.text).not.toContain(middle);
+    expect(diff.text).not.toContain(suffix);
+    expect(diff.html).toContain('<del style="background:#fee2e2');
+    expect(diff.html).toContain('<ins style="background:#dcfce7');
+    expect(diff.html).not.toContain(prefix);
+  });
+  it('escapes changed words in long-line HTML', () => {
+    const prefix = 'Same safe context. '.repeat(20);
+    const diff = renderTextChangeDiff(`${prefix}Value <old>`, `${prefix}Value <new>`);
+    expect(diff.html).toContain('&lt;');
+    expect(diff.html).toContain('&gt;');
+    expect(diff.html).toMatch(/<del[^>]*>old<\/del>/);
+    expect(diff.html).toMatch(/<ins[^>]*>new<\/ins>/);
+    expect(diff.html).not.toContain('<old>');
+    expect(diff.html).not.toContain('<new>');
+  });
+  it('omits repeated coverage only for recipients with a full report delivered within 36 hours', () => {
+    const journal = new MonitorJournal(':memory:');
+    const recipients = ['one@example.com', 'two@example.com'];
+    const options = {
+      targets: [{ id: 'example', label: 'Example', url: 'https://example.com' }],
+      checks: [sample()],
+      recipients,
+      subjectPrefix: 'Monitor',
+      since: '2026-10-01T00:00:00Z',
+      now: '2026-10-01T10:00:00Z',
+      sendEvents: true
+    };
+    try {
+      expect(projectMonitorMail(journal, { ...options, dailyDate: '2026-10-01' })).toBe(2);
+      const daily = journal.pending();
+      expect((JSON.parse(daily[0].payload) as FrozenMail).fullCoverage).toBe(true);
+      const dailyFor = (recipient: string) =>
+        daily.find((mail) => (JSON.parse(mail.payload) as FrozenMail).recipient === recipient)!;
+      journal.delivery(dailyFor(recipients[0]).id, true, 'Accepted', '2026-10-01T10:01:00Z');
+      journal.delivery(dailyFor(recipients[1]).id, false, 'SMTP failed', '2026-10-01T10:01:00Z');
+      journal.record(sample(), [
+        {
+          id: 'later-change',
+          target: 'example',
+          at: '2026-10-01T10:30:00Z',
+          kind: 'content',
+          payload: {
+            ...(sample().payload as object),
+            status: 'alert',
+            alerts: [{ message: 'Changed', observed: 'New content' }]
+          }
+        }
+      ]);
+      expect(projectMonitorMail(journal, { ...options, now: '2026-10-01T11:00:00Z' })).toBe(2);
+      const changes = journal
+        .pending()
+        .map((mail) => JSON.parse(mail.payload) as FrozenMail)
+        .filter((mail) => mail.dailyDate === null);
+      const first = changes.find((mail) => mail.recipient === recipients[0])!;
+      const second = changes.find((mail) => mail.recipient === recipients[1])!;
+      expect(first.fullCoverage).toBe(false);
+      expect(first.html).not.toContain('Complete reporting-period coverage');
+      expect(first.html).not.toContain('Retained diagnostics');
+      expect(first.text).toContain('Changed: New content');
+      expect(second.fullCoverage).toBe(true);
+      expect(second.html).toContain('Complete reporting-period coverage');
+      expect(second.html).toContain('Retained diagnostics');
+      expect(
+        journal.latestFullReportDelivery(
+          recipients[0],
+          '2026-10-01T10:01:01Z',
+          '2026-10-02T22:01:01Z'
+        )
+      ).toBeNull();
+      expect(
+        journal.latestFullReportDelivery(
+          recipients[0],
+          '2026-10-01T10:01:00Z',
+          '2026-10-02T22:01:00Z'
+        )
+      ).toBe('2026-10-01T10:01:00Z');
+      expect(
+        projectMonitorMail(journal, {
+          ...options,
+          dailyDate: '2026-10-02',
+          now: '2026-10-02T10:00:00Z'
+        })
+      ).toBe(2);
+      const nextDaily = journal
+        .pending()
+        .map((mail) => JSON.parse(mail.payload) as FrozenMail)
+        .find((mail) => mail.dailyDate === '2026-10-02')!;
+      expect(nextDaily.fullCoverage).toBe(true);
+      journal.enqueue('legacy-full', {
+        recipient: 'legacy@example.com',
+        html: '<h2>Complete reporting-period coverage</h2><h2>Retained diagnostics (including recovered problems)</h2>'
+      });
+      journal.delivery('legacy-full', true, 'Accepted', '2026-10-02T10:00:00Z');
+      expect(
+        journal.latestFullReportDelivery(
+          'legacy@example.com',
+          '2026-10-01T00:00:00Z',
+          '2026-10-03T00:00:00Z'
+        )
+      ).toBe('2026-10-02T10:00:00Z');
     } finally {
       journal.close();
     }

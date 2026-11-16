@@ -130,6 +130,7 @@ export class MonitorJournal {
         );
       this.db
         .exec(`CREATE INDEX IF NOT EXISTS outbox_due ON monitor_outbox(state,next_attempt,created);
+        CREATE INDEX IF NOT EXISTS outbox_recipient_delivered ON monitor_outbox(recipient,delivered);
         PRAGMA user_version = 2;`);
       for (const table of ['monitor_events', 'monitor_baselines', 'monitor_storage']) {
         for (const action of ['UPDATE', 'DELETE'])
@@ -385,6 +386,28 @@ export class MonitorJournal {
       )
       .get() as { daily_date: string; cutoff: string | null } | undefined;
     return row ? { dailyDate: row.daily_date, cutoff: row.cutoff } : null;
+  }
+
+  latestFullReportDelivery(recipient: string, since: string, until: string): string | null {
+    const rows = this.db
+      .prepare(
+        `SELECT delivered,payload FROM monitor_outbox
+         WHERE recipient=? AND julianday(delivered)>=julianday(?)
+           AND julianday(delivered)<=julianday(?)
+         ORDER BY delivered DESC`
+      )
+      .all(recipient, since, until) as { delivered: string; payload: string }[];
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload) as { fullCoverage?: boolean; html?: string };
+      if (
+        payload.fullCoverage === true ||
+        (payload.fullCoverage === undefined &&
+          payload.html?.includes('<h2>Complete reporting-period coverage</h2>') &&
+          payload.html.includes('<h2>Retained diagnostics'))
+      )
+        return row.delivered;
+    }
+    return null;
   }
 
   events(since: string, until: string): ContentEvent[] {
