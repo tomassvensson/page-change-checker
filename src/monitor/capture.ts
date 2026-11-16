@@ -5,7 +5,8 @@ import {
   acceptedObservations,
   compareSignatures,
   confirmEvidence,
-  evaluateEvidence
+  evaluateEvidence,
+  extractStatistic
 } from './rules.js';
 import type { MonitorRule, Observation, PageEvidence, Signature } from './rules.js';
 import { semanticSnapshot } from './semantic.js';
@@ -15,6 +16,8 @@ export interface CaptureOptions {
   navigate: () => Promise<number | null>;
   authenticate: (url: string, text: string) => string | null;
   authenticatedSelector?: string;
+  recoverAuthentication?: () => Promise<void>;
+  requiredStatistics?: string[];
   title?: (title: string) => string;
   timeoutMs?: number;
   preScreenshotWaitMs?: number;
@@ -34,13 +37,33 @@ export interface CaptureBundle {
 }
 
 class CaptureConsistencyError extends Error {}
+class CaptureReadinessError extends Error {}
+class CaptureAuthenticationError extends Error {}
 
 async function validate(page: Page, status: number | null, options: CaptureOptions) {
   if (status !== null && status >= 400) throw new Error(`HTTP ${status}; evidence not compared`);
-  const text = await page.locator('body').innerText({ timeout: options.timeoutMs ?? 30000 });
-  const title = options.title?.(await page.title()) ?? (await page.title());
-  const error = options.authenticate(page.url(), text) ?? pageValidity({ title, text });
-  if (error) throw new Error(error);
+  const deadline = Date.now() + (options.timeoutMs ?? 30000);
+  let text: string, title: string;
+  for (;;) {
+    text = await page.locator('body').innerText({ timeout: options.timeoutMs ?? 30000 });
+    title = options.title?.(await page.title()) ?? (await page.title());
+    const unavailable = pageValidity({
+      title,
+      text,
+      finalUrl: page.url(),
+      offlineDetected: (await page.locator('#main-frame-error, body.neterror').count()) > 0
+    });
+    if (unavailable) throw new CaptureReadinessError(unavailable);
+    const authError = options.authenticate(page.url(), text);
+    if (authError) throw new CaptureAuthenticationError(authError);
+    if ((options.requiredStatistics ?? []).every((label) => extractStatistic(text, label) !== null))
+      break;
+    if (Date.now() >= deadline)
+      throw new CaptureReadinessError(
+        'Required profile statistics did not finish loading; baseline retained'
+      );
+    await page.waitForTimeout(Math.min(250, Math.max(1, deadline - Date.now())));
+  }
   if (options.authenticatedSelector) {
     try {
       await page
@@ -48,9 +71,12 @@ async function validate(page: Page, status: number | null, options: CaptureOptio
         .first()
         .waitFor({ state: 'visible', timeout: options.timeoutMs ?? 30000 });
     } catch {
-      throw new Error('Required authenticated content was not found; evidence not compared');
+      throw new CaptureReadinessError(
+        'Required authenticated content was not found; evidence not compared'
+      );
     }
   }
+  return { text, title };
 }
 
 /** Image readiness is independent of the optional extra wait. Every reload is
@@ -206,7 +232,9 @@ async function captureOnce(
       /* missing scoped input is diagnosed below */
     }
   }
-  const text = await page.locator('body').innerText();
+  // Scoped screenshots and selector waits can outlive a session or navigation.
+  // Validate the actual text being compared, not just the page before those waits.
+  const { text } = await validate(page, status, options);
   const evidence: PageEvidence = {
     title,
     text,
@@ -251,7 +279,8 @@ async function captureOnce(
     (input) => input.value !== undefined || input.signature !== undefined
   );
   const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
-  if (page.url() !== evidence.finalUrl || (await page.locator('body').innerText()) !== text)
+  const final = await validate(page, status, options);
+  if (page.url() !== evidence.finalUrl || final.text !== text || final.title !== title)
     throw new CaptureConsistencyError(
       'Page changed during capture; inconsistent evidence rejected'
     );
@@ -270,8 +299,14 @@ export async function capturePage(
   try {
     return await captureOnce(page, rules, status, options);
   } catch (error) {
-    if (!(error instanceof CaptureConsistencyError)) throw error;
-    await page.waitForTimeout(1000);
+    if (error instanceof CaptureAuthenticationError && options.recoverAuthentication) {
+      await options.recoverAuthentication();
+      status = await options.navigate();
+    } else if (error instanceof CaptureReadinessError) {
+      status = await options.navigate();
+    } else if (error instanceof CaptureConsistencyError) {
+      await page.waitForTimeout(1000);
+    } else throw error;
     return captureOnce(page, rules, status, options);
   }
 }

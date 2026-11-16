@@ -139,7 +139,9 @@ describe('actual production browser orchestration', () => {
       capturePage(page, [rule], 200, { ...options, authenticatedSelector: '#signed-in-content' })
     ).rejects.toThrow('Required authenticated content');
     await page.setContent('<title>Just a moment</title>Checking your browser');
-    await expect(capturePage(page, [rule], 200, options)).rejects.toThrow('shell');
+    await expect(
+      capturePage(page, [rule], 200, { ...options, navigate: () => Promise.resolve(200) })
+    ).rejects.toThrow('shell');
   });
   it('captures semantic tables, meaningful form values and links but ignores framework noise', async () => {
     await page.setContent(

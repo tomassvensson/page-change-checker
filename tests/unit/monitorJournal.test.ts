@@ -67,6 +67,16 @@ describe('operational incident regression matrix', () => {
   it('rejects HTTP 200 verification shells and partial/delayed image readiness', () => {
     expect(pageValidity('Just a moment: checking your browser')).not.toBeNull();
     expect(pageValidity('Ordinary visible content')).toBeNull();
+    expect(
+      pageValidity({
+        title: 'Profile',
+        text: 'Press space to play DNS_PROBE_FINISHED_NO_INTERNET',
+        expectedContentPresent: true
+      })
+    ).toContain('offline');
+    expect(
+      pageValidity({ title: 'Profile', text: 'Content', finalUrl: 'chrome-error://chromewebdata/' })
+    ).toContain('offline');
     expect(imagesReady(0, 0, 5, true)).toBe(false);
     expect(imagesReady(4, 5, 5, true)).toBe(false);
     expect(imagesReady(5, 5, 5, false)).toBe(false);

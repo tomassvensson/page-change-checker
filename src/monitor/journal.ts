@@ -697,9 +697,24 @@ export function dailyDiagnostics(checks: CheckRecord[], now: string): CheckRecor
 export function pageValidity(
   input:
     | string
-    | { title: string; text: string; expectedContentPresent?: boolean; challengeDetected?: boolean }
+    | {
+        title: string;
+        text: string;
+        expectedContentPresent?: boolean;
+        challengeDetected?: boolean;
+        finalUrl?: string;
+        offlineDetected?: boolean;
+      }
 ): string | null {
   const value = typeof input === 'string' ? { title: '', text: input } : input;
+  if (
+    value.offlineDetected ||
+    /^(?:chrome-error:|about:neterror)/i.test(value.finalUrl ?? '') ||
+    /\b(?:DNS_PROBE_FINISHED_(?:NO_INTERNET|NXDOMAIN|BAD_CONFIG)|ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|CONNECTION_(?:RESET|REFUSED|CLOSED|TIMED_OUT)))\b/i.test(
+      value.text
+    )
+  )
+    return 'Browser offline or network error page; baseline retained and content not compared.';
   const shell =
     /^(?:just a moment\b|checking your browser\b|verify (?:that )?you are human\b|access denied\b|service unavailable\b|temporarily unavailable\b|zugriff verweigert\b)/i;
   return value.challengeDetected ||

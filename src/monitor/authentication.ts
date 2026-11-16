@@ -32,6 +32,12 @@ export async function ensureCredentialsLogin(page: Page, options: LoginOptions) 
     try {
       if (new URL(page.url()).origin !== expected)
         throw new Error('Login page origin changed; credentials not entered');
+      // A delayed sign-in may have completed while the retry navigation ran.
+      // Reuse that session instead of trying to fill a form that has disappeared.
+      if (i > 0 && !options.failure(page.url(), await body())) {
+        sessions.set(page.context(), { failure: null });
+        return true;
+      }
       const credential = options.credentials();
       await page
         .locator(options.usernameSelector)
