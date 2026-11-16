@@ -278,9 +278,38 @@ async function captureOnce(
   evidence.expectedContentPresent = Object.values(evidence.inputs).some(
     (input) => input.value !== undefined || input.signature !== undefined
   );
+  const scopedTextOnly = rules.every((rule) => rule.kind === 'visibleTextSnapshot');
   const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
+  // Full-page screenshots briefly resize the viewport. Allow the site's resize
+  // handlers to restore clipped text before verifying a text-only capture.
+  if (scopedTextOnly) await page.waitForTimeout(250);
   const final = await validate(page, status, options);
-  if (page.url() !== evidence.finalUrl || final.text !== text || final.title !== title)
+  let contentChanged = final.text !== text || final.title !== title;
+  if (scopedTextOnly) {
+    const inputs: PageEvidence['inputs'] = {};
+    for (const rule of rules) {
+      try {
+        inputs[rule.id] = {
+          value: await page
+            .locator(rule.selector ?? 'body')
+            .first()
+            .innerText({ timeout: options.timeoutMs ?? 30000 })
+        };
+      } catch {
+        inputs[rule.id] = { error: 'Required rule input was not captured.' };
+      }
+    }
+    const before = evaluateEvidence(rules, evidence);
+    const after = evaluateEvidence(rules, { ...evidence, text: final.text, inputs });
+    contentChanged = before.some(
+      (decision, index) =>
+        decision.valid !== after[index].valid ||
+        decision.observation?.hash !== after[index].observation?.hash
+    );
+    evidence.text = final.text;
+    evidence.title = final.title;
+  }
+  if (page.url() !== evidence.finalUrl || contentChanged)
     throw new CaptureConsistencyError(
       'Page changed during capture; inconsistent evidence rejected'
     );

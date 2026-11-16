@@ -25,6 +25,53 @@ afterAll(async () => {
 });
 
 describe('capture readiness and recovery before accepting content', () => {
+  it('allows temporary text clipping from full-page screenshot viewport restoration to settle', async () => {
+    await page.setContent('<title>Profile</title><main>Stable words</main>');
+    const original = page.screenshot.bind(page);
+    const spy = vi.spyOn(page, 'screenshot').mockImplementation(async (options) => {
+      const png = await original(options);
+      await page.evaluate(() => {
+        document.querySelector('main')!.textContent = 'Stable';
+        setTimeout(() => {
+          document.querySelector('main')!.textContent = 'Stable words';
+        }, 100);
+      });
+      return png;
+    });
+    try {
+      const result = await capturePage(page, [rule], 200, {
+        navigate: () => Promise.resolve(200),
+        authenticate: () => null
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(result.evidence.inputs.profile.value).toBe('Stable words');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it('ignores changes outside watched text and whitespace-only layout changes during capture', async () => {
+    await page.setContent('<title>Before</title><main>Stable words</main><footer>Before</footer>');
+    const original = page.screenshot.bind(page);
+    const spy = vi.spyOn(page, 'screenshot').mockImplementation(async (options) => {
+      const png = await original(options);
+      await page.evaluate(() => {
+        document.title = 'After';
+        document.querySelector('footer')!.textContent = 'After';
+        document.querySelector('main')!.innerHTML = '<p>Stable</p><p>words</p>';
+      });
+      return png;
+    });
+    try {
+      const result = await capturePage(page, [{ ...rule, normalizeWhitespace: true }], 200, {
+        navigate: () => Promise.resolve(200),
+        authenticate: () => null
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(result.evidence.inputs.profile.value).toBe('Stable words');
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it('waits for delayed statistics before comparing the profile', async () => {
     const result = await runRuleCheck(
       page,
