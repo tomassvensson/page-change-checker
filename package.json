@@ -31,10 +31,10 @@
     "commander": "^14.0.3",
     "diff": "^9.0.0",
     "ipaddr.js": "^2.4.0",
-    "nodemailer": "^10.0.13",
+    "nodemailer": "^10.6.0",
     "playwright": "^1.51.1",
     "safe-regex2": "^5.1.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
