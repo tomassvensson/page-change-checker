@@ -5,34 +5,36 @@ import { DEFAULT_NORMALIZE, normalizeText } from '../core/normalize.js';
 import { ensureCredentialsLogin } from './authentication.js';
 import type { MonitorTarget } from './config.js';
 
+export interface AdapterPolicy {
+  name?: string;
+  allowedOrigins?: string[];
+  requiredStatistics?: string[];
+  forbiddenSelectors?: string[];
+  annotateChanges?: boolean;
+  validate?: (url: string, text: string) => string | null;
+  bootstrapUrl?: string;
+}
 export interface WebsiteAdapter {
-  name: 'generic' | 'metric' | 'provider' | 'provider';
+  name: string;
   requiredStatistics: string[];
   authenticatedSelector?: string;
+  annotateChanges: boolean;
   authenticationFailure: (url: string, text: string) => string | null;
   authenticate: (page: Page) => Promise<boolean>;
 }
-
 const normalized = (text: string) => normalizeText(text, DEFAULT_NORMALIZE).toLowerCase();
-const providerRegionalOrigins = new Set(['https://example.com/resource', 'https://example.com/resource']);
-
-/** Provider policy is separate from browser capture, comparison and persistence. */
 export function authenticationFailure(
   target: MonitorTarget,
   url: string,
   text: string,
-  signInOnly = false
+  signInOnly = false,
+  policy: AdapterPolicy = {}
 ): string | null {
   if (!target.authenticationRequired) return null;
   const configuredOrigin = new URL(target.url).origin;
   const landedOrigin = new URL(url).origin;
-  // A known regional redirect is presentation navigation, not permission to
-  // forward credentials: automatic login remains strictly origin-bound.
-  const regionalRedirect =
-    !target.autoLogin &&
-    providerRegionalOrigins.has(configuredOrigin) &&
-    providerRegionalOrigins.has(landedOrigin);
-  if (landedOrigin !== configuredOrigin && !regionalRedirect)
+  const allowedRedirect = !target.autoLogin && policy.allowedOrigins?.includes(landedOrigin);
+  if (landedOrigin !== configuredOrigin && !allowedRedirect)
     return 'Authentication is unavailable because the page left the configured site.';
   const check = target.authCheck;
   const route = url.toLowerCase();
@@ -40,44 +42,30 @@ export function authenticationFailure(
     return 'Authentication is unavailable because the browser reached a login page.';
   const body = normalized(text);
   const prompt = check?.loggedOutTextContains?.find((marker) => body.includes(normalized(marker)));
-  if (prompt)
-    return `Authentication is unavailable because the page contains the login prompt "${prompt}".`;
+  if (prompt) return 'Authentication is unavailable because a configured login prompt is visible.';
   if (
     !signInOnly &&
     check?.requiredUrlContains?.some((marker) => !route.includes(marker.toLowerCase()))
   )
-    return 'Authentication or navigation failed because the requested module is not loaded.';
-  if (new URL(target.url).hostname === 'www.metric.com') {
-    const statistics = /\b(?:Value A|Value B)\b/iu.test(text);
-    const unavailable =
-      /\b(?:Log in|Sign up|Error 404)\b|Sorry, the page you were looking for doesn[’']t exist/iu.test(
-        text
-      );
-    if (/\/(?:log-in|login)(?:[/?#]|$)/iu.test(url) || (!statistics && unavailable))
-      return 'Metric profile content is unavailable because the session or profile route could not be loaded.';
-  }
-  return null;
+    return 'Authentication or navigation failed because the requested content is not loaded.';
+  return policy.validate?.(url, text) ?? null;
 }
-
 export function createWebsiteAdapter(
   target: MonitorTarget,
-  credentials: () => { user: string; password: string }
+  credentials: () => { user: string; password: string },
+  policy: AdapterPolicy = {}
 ): WebsiteAdapter {
-  const host = new URL(target.url).hostname;
-  const name = websiteName(host);
   return {
-    name,
-    requiredStatistics:
-      name === 'metric'
-        ? [target.progress?.metricALabel ?? 'Value A', target.progress?.metricBLabel ?? 'Value B']
-        : [],
+    name: policy.name ?? 'generic',
+    requiredStatistics: policy.requiredStatistics ?? [],
     authenticatedSelector: target.authCheck?.requiredSelector,
-    authenticationFailure: (url, text) => authenticationFailure(target, url, text),
+    annotateChanges: policy.annotateChanges ?? true,
+    authenticationFailure: (url, text) => authenticationFailure(target, url, text, false, policy),
     authenticate: async (page) => {
       const login = target.autoLogin;
       if (!login) return false;
       return ensureCredentialsLogin(page, {
-        forbiddenSelectors: ['#accessCode'],
+        forbiddenSelectors: policy.forbiddenSelectors ?? [],
         url: target.url,
         usernameSelector: login.usernameSelector,
         passwordSelector: login.passwordSelector,
@@ -86,14 +74,8 @@ export function createWebsiteAdapter(
         maxAttempts: login.maxAttempts ?? 3,
         retryDelayMs: login.retryDelayMs ?? 180000,
         credentials,
-        failure: (url, text) => authenticationFailure(target, url, text, true)
+        failure: (url, text) => authenticationFailure(target, url, text, true, policy)
       });
     }
   };
-}
-function websiteName(host: string): WebsiteAdapter['name'] {
-  if (host.includes('metric.com')) return 'metric';
-  if (host.includes('provider-online.de')) return 'provider';
-  if (host.includes('provider.')) return 'provider';
-  return 'generic';
 }

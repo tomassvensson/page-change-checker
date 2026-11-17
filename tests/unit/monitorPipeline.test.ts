@@ -174,38 +174,39 @@ it('centralizes website readiness and authenticated origin/module policy without
   ).toContain('left the configured site');
   expect(authenticationFailure(configured, target.url, 'Login')).toContain('login prompt');
   expect(authenticationFailure(configured, 'https://example.com/dashboard', 'Account')).toContain(
-    'module'
+    'content'
   );
   expect(
     authenticationFailure(configured, 'https://example.com/dashboard', 'Account', true)
   ).toBeNull();
   expect(authenticationFailure(configured, target.url, 'Account')).toBeNull();
-  const regional = {
-    ...configured,
-    url: 'https://example.com/resource',
-    authCheck: undefined
+  const regional = { ...configured, authCheck: undefined };
+  const policy = {
+    name: 'adapter-01',
+    allowedOrigins: ['https://example.net'],
+    requiredStatistics: ['Value A', 'Value B'],
+    validate: (_url: string, text: string) =>
+      text.includes('Pending') ? 'Required content unavailable' : null
   };
   expect(
-    authenticationFailure(regional, 'https://example.com/resource', 'Profile')
+    authenticationFailure(regional, 'https://example.net/resource', 'Resource', false, policy)
   ).toBeNull();
   expect(
-    authenticationFailure(regional, 'https://example.com/resource', 'Profile')
+    authenticationFailure(regional, 'https://attacker.example/resource', 'Resource', false, policy)
   ).toContain('left the configured site');
-  expect(authenticationFailure(regional, 'https://example.com/resource', 'Profile')).toContain(
-    'left the configured site'
-  );
+  expect(
+    authenticationFailure(regional, 'http://example.net/resource', 'Resource', false, policy)
+  ).toContain('left the configured site');
   expect(createWebsiteAdapter(configured, () => ({ user: 'test', password: 'test' })).name).toBe(
     'generic'
   );
-  const duo = {
-    ...configured,
-    url: 'https://example.com/resource',
-    authCheck: undefined
-  };
   expect(
-    createWebsiteAdapter(duo, () => ({ user: 'test', password: 'test' })).requiredStatistics
+    createWebsiteAdapter(regional, () => ({ user: 'test', password: 'test' }), policy)
+      .requiredStatistics
   ).toEqual(['Value A', 'Value B']);
-  expect(authenticationFailure(duo, duo.url, 'Log in')).toContain('unavailable');
+  expect(authenticationFailure(regional, regional.url, 'Pending', false, policy)).toContain(
+    'unavailable'
+  );
   expect(
     authenticationFailure(
       { ...configured, authenticationRequired: false },
@@ -223,26 +224,8 @@ it('centralizes website readiness and authenticated origin/module policy without
   expect(
     authenticationFailure({ ...configured, authCheck: undefined }, target.url, 'Account')
   ).toBeNull();
-  expect(authenticationFailure(duo, 'https://example.com/resource', '1200 Value A')).toContain(
-    'unavailable'
-  );
-  expect(authenticationFailure(duo, duo.url, '1200 Value A Log in')).toBeNull();
+  expect(authenticationFailure(regional, regional.url, 'Resource', false, policy)).toBeNull();
   expect(
-    createWebsiteAdapter({ ...configured, url: 'https://example.com/resource' }, () => ({
-      user: 'test',
-      password: 'test'
-    })).name
-  ).toBe('provider');
-  expect(
-    createWebsiteAdapter({ ...configured, url: 'https://example.com/resource' }, () => ({
-      user: 'test',
-      password: 'test'
-    })).name
-  ).toBe('provider');
-  expect(
-    createWebsiteAdapter(
-      { ...duo, progress: { metricALabel: 'Experience', metricBLabel: 'valueB' } },
-      () => ({ user: 'test', password: 'test' })
-    ).requiredStatistics
-  ).toEqual(['Experience', 'valueB']);
+    createWebsiteAdapter(regional, () => ({ user: 'test', password: 'test' }), policy).name
+  ).toBe('adapter-01');
 });

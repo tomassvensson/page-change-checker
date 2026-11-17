@@ -42,14 +42,21 @@ import { projectMonitorMail, renderTextChangeDiff, verifyAcceptance } from './ma
 import type { EvidenceResult } from './mail.js';
 import { navigateWithRetries } from './navigation.js';
 import { renderPeriodSummary, periodSummary } from './period.js';
-import { createStageRecorder } from './pipeline.js';
+import { createStageRecorder, authenticationState } from './pipeline.js';
 import { safePathPart, windowsPowerShell } from './platform.js';
+import { loadLocalAdapter } from './plugins.js';
 import type { ReplayEntry } from './replay.js';
 import { replayRules } from './replay.js';
-import { ruleSchema, extractStatistic as sharedExtractStatistic } from './rules.js';
-import type { Observation } from './rules.js';
+import { ruleSchema } from './rules.js';
+import type { Observation, PageEvidence, Signature } from './rules.js';
 import {
+  extractMetricProgress,
+  sqlLiteral,
+  firstVisibleTextMarker,
+  dismissCookieConsent,
   finishResult,
+  formatEventSummary,
+  captureStatus,
   authenticationFailureReason,
   printConsoleTables,
   screenshotLinks,
@@ -84,7 +91,6 @@ import type {
   MonitorState,
   MonitorResult,
   MonitorEvent,
-  ProgressConfig,
   HistoryConnection,
   DailyEmail,
   NavigationOutcome,
@@ -92,6 +98,10 @@ import type {
   ReportContext
 } from './runtimeTypes.js';
 import { createWebsiteAdapter } from './sites.js';
+
+function writeJson(path: string, value: unknown) {
+  atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
+}
 
 export async function runLocalMonitor(root: string, args: string[] = process.argv.slice(2)) {
   const monitorDir = resolve(root);
@@ -117,6 +127,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     );
 
   const settings = parsedSettings.data;
+  const localAdapter = await loadLocalAdapter(monitorDir, settings.adapterModule);
 
   const evidenceStore = new EvidenceStore(
     join(monitorDir, 'evidence'),
@@ -168,139 +179,23 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       return;
     }
 
-    if (args.includes('--health-snapshot')) {
-      journal = new MonitorJournal(join(monitorDir, 'operations.sqlite'), { readOnly: true });
-      try {
-        writeHealthSnapshot(readState());
-      } finally {
-        journal.close();
-      }
-      return;
-    }
-    if (args.includes('--doctor')) {
-      journal = new MonitorJournal(join(monitorDir, 'operations.sqlite'), { readOnly: true });
-      try {
-        const output = {
-          components: await localDoctor(),
-          health: writeHealthSnapshot(readState())
-        };
-        writeJson(join(reportsDir, 'doctor.json'), output);
-        console.log('Component preflight saved locally; no email sent or history inserted.');
-      } finally {
-        journal.close();
-      }
-      return;
-    }
+    if (await runReadOnlyCommand()) return;
     const lock = acquireFileLock(join(monitorDir, 'monitor'));
     journal = new MonitorJournal(join(monitorDir, 'operations.sqlite'));
 
     try {
       const dryIndex = args.indexOf('--dry-run-target');
       if (dryIndex >= 0) {
-        const match = args[dryIndex + 1];
-        const target = settings.targets.find((t) => t.id === match || t.url.includes(match));
-        if (!target) throw new Error('Unknown local dry-run target');
-        const context = await chromium.launchPersistentContext(
-          profileDirectory(new URL(target.url).origin, target),
-          {
-            headless: true,
-            ...(target.browserChannel ? { channel: target.browserChannel } : {}),
-            locale: 'de-DE',
-            timezoneId: 'Europe/Berlin',
-            viewport: { width: 1400, height: 1000 }
-          }
-        );
-        try {
-          const result = await inspectTarget(context, target, new Date(), readState());
-          const replay =
-            result.captureEvidence && result.firstEvidence && result.evidenceId
-              ? replayRules([
-                  {
-                    target: target.id,
-                    evidenceId: result.evidenceId,
-                    rules: target.rules,
-                    firstEvidence: result.firstEvidence,
-                    evidence: result.captureEvidence
-                  }
-                ])
-              : [];
-          writeJson(join(reportsDir, 'dry-run.json'), { result, replay });
-          console.log(
-            JSON.stringify({
-              status: result.status,
-              validated: result.observationsValidated,
-              confirmedRules: result.decisions?.filter((d) => d.confirmed).length ?? 0,
-              activityKnown:
-                result.metricValues?.activeToday !== null && result.metricValues !== null
-            })
-          );
-        } finally {
-          await context.close();
-        }
+        await dryRunTarget(dryIndex);
         return;
       }
       const replayIndex = args.indexOf('--replay-rules');
       if (replayIndex >= 0) {
-        const proposedPath = args[replayIndex + 1];
-        if (!proposedPath) throw new Error('Provide a local proposed rules JSON file.');
-        const proposed = ruleSchema
-          .array()
-          .min(1)
-          .parse(JSON.parse(readFileSync(proposedPath, 'utf8')));
-        if (new Set(proposed.map((r) => r.id)).size !== proposed.length)
-          throw new Error('Duplicate proposed rule IDs');
-        const unavailable: { evidenceId: string; reason: string }[] = [];
-        const records = journal
-          .checks('1970-01-01', new Date().toISOString())
-          .map((c) => c.payload as Partial<MonitorResult>)
-          .map((r): ReplayEntry | null => {
-            if (!r.id || !r.evidenceId || !r.captureEvidence || !r.firstEvidence) return null;
-            let archive;
-            try {
-              archive = evidenceStore.get(r.evidenceId);
-            } catch {
-              unavailable.push({
-                evidenceId: r.evidenceId,
-                reason: 'Archive unavailable; recapture required.'
-              });
-              return null;
-            }
-            const definition = z.object({ rules: ruleSchema.array() }).safeParse(archive.bundle);
-            if (archive.expired || !definition.success) {
-              unavailable.push({
-                evidenceId: r.evidenceId,
-                reason: 'Archive expired or lacks rule definitions; recapture required.'
-              });
-              return null;
-            }
-            return {
-              target: r.id,
-              evidenceId: r.evidenceId,
-              rules: definition.data.rules,
-              firstEvidence: r.firstEvidence,
-              evidence: r.captureEvidence
-            };
-          })
-          .filter((r): r is ReplayEntry => r !== null);
-        writeJson(join(reportsDir, 'rule-replay.json'), {
-          original: replayRules(records),
-          proposed: replayRules(records, proposed),
-          unavailable
-        });
+        replayRuleCommand(replayIndex);
         return;
       }
       if (args.includes('--dashboard') || args.includes('--replay')) {
-        const until = new Date().toISOString();
-        const since = new Date(Date.now() - 7 * 86400000).toISOString();
-        const output = args.includes('--replay')
-          ? journal.checks(since, until)
-          : journal.metrics(since, until);
-        const path = join(
-          reportsDir,
-          args.includes('--replay') ? 'replay-evidence.json' : 'dashboard.json'
-        );
-        writeJson(path, output);
-        console.log(`Local read-only report: ${path}`);
+        dashboardReport();
         return;
       }
       if (args.includes('--login')) {
@@ -496,7 +391,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       viewport: { width: 1400, height: 1000 }
     });
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto('https://example.com/resource', {
+    await page.goto(localAdapter.policy(target).bootstrapUrl ?? target.url, {
       waitUntil: 'domcontentloaded',
       timeout: Number(settings.navigationTimeoutMs ?? 60_000)
     });
@@ -511,7 +406,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
   }
 
   async function testAutomaticLogin() {
-    const target = settings.targets.find((candidate) => candidate.adapterKey === 'provider');
+    const target = settings.targets.find((candidate) => candidate.autoLogin);
     if (!target?.autoLogin) {
       throw new Error('No automatic provider login target is configured.');
     }
@@ -533,9 +428,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         target.authCheck?.loggedOutTextContains ?? []
       );
       if (!loginMarker) {
-        throw new Error(
-          'Fresh provider browser did not expose a configured logged-out marker.'
-        );
+        throw new Error('Fresh provider browser did not expose a configured logged-out marker.');
       }
       if (!(await ensureAutomaticLogin(page, target))) {
         throw new Error(`provider marker "${loginMarker}" did not trigger automatic login.`);
@@ -545,15 +438,19 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       const text = await page.locator('body').innerText({
         timeout: Number(settings.navigationTimeoutMs ?? 60_000)
       });
-      const authenticationFailure = authenticationFailureReason(target, page.url(), text);
+      const authenticationFailure = authenticationFailureReason(
+        target,
+        page.url(),
+        text,
+        false,
+        localAdapter.policy(target)
+      );
       if (authenticationFailure) throw new Error(authenticationFailure);
       const requiredRule = target.rules.find((rule) => 'selector' in rule);
       if (requiredRule && 'selector' in requiredRule && requiredRule.selector) {
         await waitForRequiredElement(page.locator(requiredRule.selector).first(), requiredRule);
       }
-      console.log(
-        `provider automatic-login test passed from marker "${loginMarker}" without using #accessCode.`
-      );
+      console.log('Automatic-login test passed from the configured logged-out state.');
     } finally {
       await browser.close();
     }
@@ -627,27 +524,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
 
     const checkedTargetIds = new Set(results.map((r) => r.id));
     const historyOutcome = await recoverHistory();
-    for (const event of journal.events('1970-01-01', new Date().toISOString())) {
-      const targetState = nextState.targets[event.target];
-      if (
-        event.kind === 'progress' &&
-        targetState &&
-        (!targetState.lastInterestingChangeAt ||
-          Date.parse(event.at) > Date.parse(targetState.lastInterestingChangeAt))
-      )
-        targetState.lastInterestingChangeAt = event.at;
-    }
-    for (const result of results)
-      if (nextState.targets[result.id]?.lastInterestingChangeAt)
-        result.lastInterestingChangeAt = nextState.targets[result.id].lastInterestingChangeAt;
-    if (historyOutcome.error || earlyHistory.error)
-      for (const result of results.filter((r) =>
-        isActiveMetricHistoryTarget(settings.targets.find((t) => t.id === r.id))
-      ))
-        result.warnings.push(
-          'History backlog recovery failed; queued data is retained: ' +
-            (historyOutcome.error ?? earlyHistory.error)
-        );
+    applyHistoryOutcome(nextState, results, historyOutcome.error, earlyHistory.error);
     const skippedTargets = settings.targets
       .filter((t) => !checkedTargetIds.has(t.id))
       .map((t) => {
@@ -732,13 +609,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       message:
         newEvents.length === 0
           ? 'No confirmed content changes. See the report for validated, skipped or inconclusive checks.'
-          : newEvents
-              .slice(0, 5)
-              .map(
-                (event) =>
-                  `${event.label}${event.title ? ` — ${event.title}` : ''}: ${event.summary}`
-              )
-              .join('\n'),
+          : newEvents.slice(0, 5).map(formatEventSummary).join('\n'),
       reportPath,
       openReport: settings.openReportOnNotification === true
     });
@@ -782,11 +653,10 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         retries: result.retries,
         attemptStatuses: result.attemptStatuses,
         attempts: result.attempts,
-        authentication: target.authenticationRequired
-          ? result.pageValidated
-            ? 'validated'
-            : 'unverified'
-          : 'not-required',
+        authentication: authenticationState(
+          target.authenticationRequired ?? false,
+          result.pageValidated
+        ),
         baselineVersion: ruleVersion(target.rules),
         evidenceId: result.evidenceId,
         storageResult: result.storageResult,
@@ -815,19 +685,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     previousState: MonitorState
   ): Promise<MonitorResult> {
     const saved = previousState.targets?.[target.id];
-    const revisions = journal.latestBaselines(target.id);
-    const prior: Record<string, Observation> = Object.fromEntries(
-      revisions
-        .filter((r) => r.ruleId !== '__screenshot__')
-        .flatMap((r) => {
-          const parsed = observationSchema.safeParse(r.observation);
-          return parsed.success ? [[r.ruleId, parsed.data]] : [];
-        })
-    );
-    const parsedSignature = signatureSchema.safeParse(
-      revisions.find((r) => r.ruleId === '__screenshot__')?.observation
-    );
-    const previousSignature = parsedSignature.success ? parsedSignature.data : undefined;
+    const { prior, previousSignature } = readBaseline(target);
     const result: MonitorResult = {
       id: target.id,
       label: target.label,
@@ -858,20 +716,15 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       storageResult: 'not-required'
     };
     const page = await context.newPage();
-    const activityObserver =
-      target.progress?.activityResponseUrlContains && target.progress.activityDatePath
-        ? watchRecordActivity(page, {
-            username: new URL(target.url).pathname.split('/').filter(Boolean).at(-1) ?? '',
-            responseUrlContains: target.progress.activityResponseUrlContains,
-            datePath: target.progress.activityDatePath,
-            timeZone: target.progress.activityTimeZone
-          })
-        : null;
-    const adapter = createWebsiteAdapter(target, () =>
-      readWindowsCredential(
-        target.autoLogin?.credentialFile,
-        'Encrypted login credential is unavailable.'
-      )
+    const activityObserver = createActivityObserver(page, target);
+    const adapter = createWebsiteAdapter(
+      target,
+      () =>
+        readWindowsCredential(
+          target.autoLogin?.credentialFile,
+          'Encrypted login credential is unavailable.'
+        ),
+      localAdapter.policy(target)
     );
     result.stages ??= [];
     const observeStage = createStageRecorder(result.stages);
@@ -938,93 +791,19 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         evidence.at
       );
       result.screenshotPath = evidenceStore.imagePath(result.evidenceId);
-      if (
-        target.adapterKey !== 'provider' &&
-        outcome.changed &&
-        previousSignature &&
-        signature &&
-        screenshot
-      ) {
-        const diff = await annotateChanges(page, screenshot, previousSignature, signature);
-        if (diff)
-          result.diffScreenshotPath = saveScreenshotBuffer(target, checkedAt, diff, 'changes');
-      }
-      if (isActiveMetricHistoryTarget(target)) {
-        result.metricValues = {
-          ...extractMetricProgress(evidence.text, target.progress),
-          activeToday: null,
-          activitySource: 'unavailable'
-        };
-        const progress = target.progress;
-        if (activityObserver) {
-          const activity = await activityObserver.read(evidence.at);
-          if (
-            activity &&
-            (activity.apiValueA === null ||
-              activity.apiValueA === result.metricValues.valueA) &&
-            (activity.apiValueB === null ||
-              activity.apiValueB === result.metricValues.valueB)
-          ) {
-            result.metricValues.activeToday = activity.activeToday;
-            result.metricValues.activitySource = activity.source;
-            result.metricValues.activityDay = activity.activityDay;
-            result.metricValues.activityTimeZone = activity.timeZone;
-          }
-        }
-        if (progress?.activitySelector) {
-          const locator = page.locator(progress.activitySelector).first();
-          if (await locator.count()) {
-            const value = progress.activityAttribute
-              ? await locator.getAttribute(progress.activityAttribute)
-              : await locator.innerText();
-            result.metricValues.activeToday = parseActivityIndicator(
-              value,
-              progress.activeValues ?? [],
-              progress.inactiveValues ?? []
-            );
-            result.metricValues.activitySource = progress.activityAttribute ?? 'visible-text';
-          }
-        }
-        if (result.metricValues.activeToday === null)
-          result.warnings.push(
-            'Activation indicator unavailable; stored as unknown, not inferred from metric values.'
-          );
-        if (result.metricValues.valueA === null || result.metricValues.valueB === null)
-          result.warnings.push(
-            'A required progress statistic was unavailable; valid metrics retained independently.'
-          );
-      }
-      result.status = outcome.changed
-        ? 'alert'
-        : !outcome.confirmedAll
-          ? 'inconclusive'
-          : result.warnings.length
-            ? 'warning'
-            : 'unchanged';
-    } catch (error) {
-      result.status = 'error';
-      result.error = errorMessage(error);
-      result.httpStatus = result.attempts.at(-1)?.status ?? result.httpStatus;
-      result.finalUrl = page.url() || target.url;
-      result.title =
-        normalizePageTitle(await page.title().catch(() => ''), target) || saved?.title || '';
-      result.text = await page
-        .locator('body')
-        .innerText({ timeout: 2000 })
-        .catch(() => '');
-      result.persistentFailure = Boolean(
-        authenticationFailureReason(target, result.finalUrl, result.text)
+      await createChangeMap(
+        page,
+        target,
+        result,
+        checkedAt,
+        previousSignature,
+        adapter.annotateChanges,
+        outcome
       );
-      try {
-        const screenshot = await page.screenshot({ fullPage: true, timeout: 5000 });
-        result.evidenceId = evidenceStore.put(
-          { target: target.id, title: result.title, text: result.text, error: result.error },
-          screenshot
-        );
-        result.screenshotPath = evidenceStore.imagePath(result.evidenceId);
-      } catch {
-        result.warnings.push('Error evidence screenshot unavailable.');
-      }
+      await populateMetricValues(page, target, result, evidence, activityObserver);
+      result.status = captureStatus(outcome.changed, outcome.confirmedAll, result.warnings);
+    } catch (error) {
+      await captureFailure(page, target, result, saved, error, adapter);
     } finally {
       activityObserver?.close();
       await page.close().catch(() => undefined);
@@ -1044,13 +823,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       target !== undefined &&
       history.activeTargetIds.includes(target.id)
     );
-  }
-
-  function extractMetricProgress(text: string, progress: ProgressConfig) {
-    return {
-      valueA: sharedExtractStatistic(text, progress?.metricALabel ?? 'Value A'),
-      valueB: sharedExtractStatistic(text, progress?.metricBLabel ?? 'Value B')
-    };
   }
 
   function historyConnection() {
@@ -1189,7 +961,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       '--set',
       'ON_ERROR_STOP=1',
       '--command',
-      sql
+      localAdapter.rewriteHistorySql?.(sql) ?? sql
     ];
     if (options.tuplesOnly === true) {
       args.push('--tuples-only', '--no-align', '--field-separator', '|');
@@ -1204,10 +976,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
-  }
-
-  function sqlLiteral(value: unknown) {
-    return `'${String(value).replaceAll("'", "''")}'`;
   }
 
   function changeConfirmationWaitMs(target: MonitorTarget) {
@@ -1289,27 +1057,15 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
   }
 
   function ensureAutomaticLogin(page: Page, target: MonitorTarget) {
-    return createWebsiteAdapter(target, () =>
-      readWindowsCredential(
-        target.autoLogin?.credentialFile,
-        'Encrypted login credential is unavailable.'
-      )
+    return createWebsiteAdapter(
+      target,
+      () =>
+        readWindowsCredential(
+          target.autoLogin?.credentialFile,
+          'Encrypted login credential is unavailable.'
+        ),
+      localAdapter.policy(target)
     ).authenticate(page);
-  }
-
-  async function firstVisibleTextMarker(page: Page, markers: string[]) {
-    for (const marker of markers) {
-      if (
-        await page
-          .getByText(String(marker), { exact: true })
-          .first()
-          .isVisible({ timeout: 500 })
-          .catch(() => false)
-      ) {
-        return String(marker);
-      }
-    }
-    return null;
   }
 
   async function waitForRequiredElement(
@@ -1323,22 +1079,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       throw new Error(
         `Required element "${rule.selector}" was not visible within ${(timeoutMs / 1_000).toString()} seconds; the login may have expired or the page structure may have changed.`
       );
-    }
-  }
-
-  async function dismissCookieConsent(page: Page) {
-    const selectors = [
-      '#onetrust-accept-btn-handler',
-      '[data-testid="cookie-banner-accept"]',
-      'button:has-text("Alle akzeptieren")',
-      'button:has-text("Accept all")'
-    ];
-    for (const selector of selectors) {
-      const button = page.locator(selector).first();
-      if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
-        await button.click({ timeout: 2_000 }).catch(() => undefined);
-        return;
-      }
     }
   }
 
@@ -1401,7 +1141,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       ...reportContext
     });
     writeFileSync(archivePath, html, { encoding: 'utf8', mode: 0o600 });
-    writeAtomically(latestPath, html);
+    atomicWrite(latestPath, html);
     return latestPath;
   }
 
@@ -1694,12 +1434,12 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     const outcome = await drainMonitorMail(journal),
       latest = journal.latestDailyDelivery(settings.dailyEmail?.to),
       queue = journal.queueHealth();
+    let error: string | null = null;
+    if (queue.quarantined)
+      error = 'A permanently rejected message is quarantined; inspect dashboard.';
+    if (outcome.errors.length) error = outcome.errors.join('; ');
     return {
-      error: outcome.errors.length
-        ? outcome.errors.join('; ')
-        : queue.quarantined
-          ? 'A permanently rejected message is quarantined; inspect dashboard.'
-          : null,
+      error,
       sentDate: latest?.dailyDate ?? null,
       cutoff: latest?.cutoff ?? null,
       pendingEventEmailFingerprint: queue.pending ? 'pending' : null
@@ -1835,11 +1575,293 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     }
   }
 
-  function writeJson(path: string, value: unknown) {
-    writeAtomically(path, `${JSON.stringify(value, null, 2)}\n`);
+  async function populateMetricValues(
+    page: Page,
+    target: MonitorTarget,
+    result: MonitorResult,
+    evidence: PageEvidence,
+    activityObserver: ReturnType<typeof watchRecordActivity> | null
+  ) {
+    if (!isActiveMetricHistoryTarget(target)) return;
+    result.metricValues = {
+      ...extractMetricProgress(evidence.text, target.progress),
+      activeToday: null,
+      activitySource: 'unavailable'
+    };
+    const progress = target.progress;
+    if (activityObserver) {
+      const activity = await activityObserver.read(evidence.at);
+      if (
+        activity &&
+        (activity.apiValueA === null || activity.apiValueA === result.metricValues.valueA) &&
+        (activity.apiValueB === null || activity.apiValueB === result.metricValues.valueB)
+      ) {
+        result.metricValues.activeToday = activity.activeToday;
+        result.metricValues.activitySource = activity.source;
+        result.metricValues.activityDay = activity.activityDay;
+        result.metricValues.activityTimeZone = activity.timeZone;
+      }
+    }
+    if (progress?.activitySelector) {
+      const locator = page.locator(progress.activitySelector).first();
+      if (await locator.count()) {
+        const value = progress.activityAttribute
+          ? await locator.getAttribute(progress.activityAttribute)
+          : await locator.innerText();
+        result.metricValues.activeToday = parseActivityIndicator(
+          value,
+          progress.activeValues ?? [],
+          progress.inactiveValues ?? []
+        );
+        result.metricValues.activitySource = progress.activityAttribute ?? 'visible-text';
+      }
+    }
+    if (result.metricValues.activeToday === null)
+      result.warnings.push(
+        'Activation indicator unavailable; stored as unknown, not inferred from metric values.'
+      );
+    if (result.metricValues.valueA === null || result.metricValues.valueB === null)
+      result.warnings.push(
+        'A required progress statistic was unavailable; valid metrics retained independently.'
+      );
   }
 
-  function writeAtomically(path: string, content: string) {
-    atomicWrite(path, content);
+  async function captureFailure(
+    page: Page,
+    target: MonitorTarget,
+    result: MonitorResult,
+    saved: MonitorState['targets'][string] | undefined,
+    error: unknown,
+    adapter: ReturnType<typeof createWebsiteAdapter>
+  ) {
+    result.status = 'error';
+    result.error = errorMessage(error);
+    result.httpStatus = result.attempts.at(-1)?.status ?? result.httpStatus;
+    result.finalUrl = page.url() || target.url;
+    result.title =
+      normalizePageTitle(await page.title().catch(() => ''), target) || saved?.title || '';
+    result.text = await page
+      .locator('body')
+      .innerText({ timeout: 2000 })
+      .catch(() => '');
+    result.persistentFailure = Boolean(adapter.authenticationFailure(result.finalUrl, result.text));
+    try {
+      const screenshot = await page.screenshot({ fullPage: true, timeout: 5000 });
+      result.evidenceId = evidenceStore.put(
+        { target: target.id, title: result.title, text: result.text, error: result.error },
+        screenshot
+      );
+      result.screenshotPath = evidenceStore.imagePath(result.evidenceId);
+    } catch {
+      result.warnings.push('Error evidence screenshot unavailable.');
+    }
+  }
+
+  async function dryRunTarget(dryIndex: number) {
+    const match = args[dryIndex + 1];
+    const target = settings.targets.find((t) => t.id === match || t.url.includes(match));
+    if (!target) throw new Error('Unknown local dry-run target');
+    const context = await chromium.launchPersistentContext(
+      profileDirectory(new URL(target.url).origin, target),
+      {
+        headless: true,
+        ...(target.browserChannel ? { channel: target.browserChannel } : {}),
+        locale: 'de-DE',
+        timezoneId: 'Europe/Berlin',
+        viewport: { width: 1400, height: 1000 }
+      }
+    );
+    try {
+      const result = await inspectTarget(context, target, new Date(), readState());
+      const replay =
+        result.captureEvidence && result.firstEvidence && result.evidenceId
+          ? replayRules([
+              {
+                target: target.id,
+                evidenceId: result.evidenceId,
+                rules: target.rules,
+                firstEvidence: result.firstEvidence,
+                evidence: result.captureEvidence
+              }
+            ])
+          : [];
+      writeJson(join(reportsDir, 'dry-run.json'), { result, replay });
+      console.log(
+        JSON.stringify({
+          status: result.status,
+          validated: result.observationsValidated,
+          confirmedRules: result.decisions?.filter((d) => d.confirmed).length ?? 0,
+          activityKnown: result.metricValues?.activeToday !== null && result.metricValues !== null
+        })
+      );
+    } finally {
+      await context.close();
+    }
+  }
+
+  function replayRuleCommand(replayIndex: number) {
+    const proposedPath = args[replayIndex + 1];
+    if (!proposedPath) throw new Error('Provide a local proposed rules JSON file.');
+    const proposed = ruleSchema
+      .array()
+      .min(1)
+      .parse(JSON.parse(readFileSync(proposedPath, 'utf8')));
+    if (new Set(proposed.map((r) => r.id)).size !== proposed.length)
+      throw new Error('Duplicate proposed rule IDs');
+    const unavailable: { evidenceId: string; reason: string }[] = [];
+    const records = journal
+      .checks('1970-01-01', new Date().toISOString())
+      .map((c) => c.payload as Partial<MonitorResult>)
+      .map((r): ReplayEntry | null => {
+        if (!r.id || !r.evidenceId || !r.captureEvidence || !r.firstEvidence) return null;
+        let archive;
+        try {
+          archive = evidenceStore.get(r.evidenceId);
+        } catch {
+          unavailable.push({
+            evidenceId: r.evidenceId,
+            reason: 'Archive unavailable; recapture required.'
+          });
+          return null;
+        }
+        const definition = z.object({ rules: ruleSchema.array() }).safeParse(archive.bundle);
+        if (archive.expired || !definition.success) {
+          unavailable.push({
+            evidenceId: r.evidenceId,
+            reason: 'Archive expired or lacks rule definitions; recapture required.'
+          });
+          return null;
+        }
+        return {
+          target: r.id,
+          evidenceId: r.evidenceId,
+          rules: definition.data.rules,
+          firstEvidence: r.firstEvidence,
+          evidence: r.captureEvidence
+        };
+      })
+      .filter((r): r is ReplayEntry => r !== null);
+    writeJson(join(reportsDir, 'rule-replay.json'), {
+      original: replayRules(records),
+      proposed: replayRules(records, proposed),
+      unavailable
+    });
+  }
+  async function runReadOnlyCommand() {
+    if (args.includes('--health-snapshot')) {
+      journal = new MonitorJournal(join(monitorDir, 'operations.sqlite'), { readOnly: true });
+      try {
+        writeHealthSnapshot(readState());
+      } finally {
+        journal.close();
+      }
+      return true;
+    }
+    if (args.includes('--doctor')) {
+      journal = new MonitorJournal(join(monitorDir, 'operations.sqlite'), { readOnly: true });
+      try {
+        const output = {
+          components: await localDoctor(),
+          health: writeHealthSnapshot(readState())
+        };
+        writeJson(join(reportsDir, 'doctor.json'), output);
+        console.log('Component preflight saved locally; no email sent or history inserted.');
+      } finally {
+        journal.close();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function dashboardReport() {
+    const until = new Date().toISOString();
+    const since = new Date(Date.now() - 7 * 86400000).toISOString();
+    const output = args.includes('--replay')
+      ? journal.checks(since, until)
+      : journal.metrics(since, until);
+    const path = join(
+      reportsDir,
+      args.includes('--replay') ? 'replay-evidence.json' : 'dashboard.json'
+    );
+    writeJson(path, output);
+    console.log(`Local read-only report: ${path}`);
+  }
+
+  function readBaseline(target: MonitorTarget) {
+    const revisions = journal.latestBaselines(target.id);
+    const prior: Record<string, Observation> = Object.fromEntries(
+      revisions
+        .filter((r) => r.ruleId !== '__screenshot__')
+        .flatMap((r) => {
+          const parsed = observationSchema.safeParse(r.observation);
+          return parsed.success ? [[r.ruleId, parsed.data]] : [];
+        })
+    );
+    const parsedSignature = signatureSchema.safeParse(
+      revisions.find((r) => r.ruleId === '__screenshot__')?.observation
+    );
+    const previousSignature = parsedSignature.success ? parsedSignature.data : undefined;
+    return { prior, previousSignature };
+  }
+
+  function createActivityObserver(page: Page, target: MonitorTarget) {
+    const activityObserver =
+      target.progress?.activityResponseUrlContains && target.progress.activityDatePath
+        ? watchRecordActivity(page, {
+            username: new URL(target.url).pathname.split('/').findLast(Boolean) ?? '',
+            responseUrlContains: target.progress.activityResponseUrlContains,
+            datePath: target.progress.activityDatePath,
+            timeZone: target.progress.activityTimeZone,
+            normalizePayload: localAdapter.normalizeActivityPayload
+          })
+        : null;
+    return activityObserver;
+  }
+
+  async function createChangeMap(
+    page: Page,
+    target: MonitorTarget,
+    result: MonitorResult,
+    checkedAt: Date,
+    previousSignature: Signature | undefined,
+    enabled: boolean,
+    outcome: Awaited<ReturnType<typeof runRuleCheck>>
+  ) {
+    const { signature, screenshot } = outcome;
+    if (enabled && outcome.changed && previousSignature && signature && screenshot) {
+      const diff = await annotateChanges(page, screenshot, previousSignature, signature);
+      if (diff)
+        result.diffScreenshotPath = saveScreenshotBuffer(target, checkedAt, diff, 'changes');
+    }
+  }
+
+  function applyHistoryOutcome(
+    nextState: MonitorState,
+    results: MonitorResult[],
+    historyError: string | null,
+    earlyError: string | null
+  ) {
+    for (const event of journal.events('1970-01-01', new Date().toISOString())) {
+      const targetState = nextState.targets[event.target];
+      if (
+        event.kind === 'progress' &&
+        targetState &&
+        (!targetState.lastInterestingChangeAt ||
+          Date.parse(event.at) > Date.parse(targetState.lastInterestingChangeAt))
+      )
+        targetState.lastInterestingChangeAt = event.at;
+    }
+    for (const result of results)
+      if (nextState.targets[result.id]?.lastInterestingChangeAt)
+        result.lastInterestingChangeAt = nextState.targets[result.id].lastInterestingChangeAt;
+    if (historyError || earlyError)
+      for (const result of results.filter((r) =>
+        isActiveMetricHistoryTarget(settings.targets.find((t) => t.id === r.id))
+      ))
+        result.warnings.push(
+          'History backlog recovery failed; queued data is retained: ' +
+            (historyError ?? earlyError)
+        );
   }
 }

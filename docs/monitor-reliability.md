@@ -75,8 +75,8 @@ independently, chronologically and idempotently, with append-only queued,
 attempted, failed/rejected and committed outcomes. Daily activity is distinct from
 numeric valueB increases, identity-checked against the monitored profile, with an
 explicit date/timezone source. Unknown activity remains unknown and a daily
-diagnostic; the signed-in account's practice is not used for another profile.
-`observedAt` is metric-read/detection time, not exact practice time.
+diagnostic; the signed-in account's activity is not used for another profile.
+`observedAt` is metric-read/detection time, not exact activity time.
 `intervalStartAt` is the prior valid observation when known. Preserve UTC instants
 and timezone offsets when graphing a repeated DST hour.
 

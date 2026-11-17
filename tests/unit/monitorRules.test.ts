@@ -86,9 +86,8 @@ describe('shared production rule decisions', () => {
   ])('reads statistic %s', (text) =>
     expect(extractStatistic(text, 'Value A')).toBe(text.includes('000') ? 1000 : 100)
   );
-  it.each(['1230\nValue B', '230 Value B'])(
-    'never confuses a trailing zero with zero',
-    (text) => expect(extractStatistic(text, 'Value B')).not.toBe(0)
+  it.each(['1230\nValue B', '230 Value B'])('never confuses a trailing zero with zero', (text) =>
+    expect(extractStatistic(text, 'Value B')).not.toBe(0)
   );
   it.each(['x\nValue A', '999999999999\nValue A', 'Value A', '100\nOther'])(
     'rejects invalid statistic %s',
@@ -143,8 +142,8 @@ describe('shared production rule decisions', () => {
   });
   it.each([
     { id: 'r', kind: 'mustContainText', text: 'missing', message: 'Absent' },
-    { id: 'r', kind: 'statMustEqual', label: 'Value A', expected: 99, message: 'valueA' },
-    { id: 'r', kind: 'statEqualsTriggers', label: 'Value B', expected: 0, message: 'valueB' }
+    { id: 'r', kind: 'statMustEqual', label: 'Value A', expected: 99, message: 'Value A' },
+    { id: 'r', kind: 'statEqualsTriggers', label: 'Value B', expected: 0, message: 'Value B' }
   ] as MonitorRule[])('evaluates active conditions %j', (condition) => {
     const decisions = confirmEvidence([condition], evidence(), evidence());
     expect(decisions[0].changed).toBe(true);
@@ -276,9 +275,9 @@ describe('shared production rule decisions', () => {
     ])
       expect(monitorSettingsSchema.safeParse(bad).success).toBe(false);
     for (const progress of [
-      { metricALabel: 'valueA', metricBLabel: 'valueB', activityResponseUrlContains: '/users' },
-      { metricALabel: 'valueA', metricBLabel: 'valueB', activityTimeZone: 'bad-zone' },
-      { metricALabel: 'valueA', metricBLabel: 'valueB', activitySelector: '.flame' }
+      { metricALabel: 'Value A', metricBLabel: 'Value B', activityResponseUrlContains: '/users' },
+      { metricALabel: 'Value A', metricBLabel: 'Value B', activityTimeZone: 'bad-zone' },
+      { metricALabel: 'Value A', metricBLabel: 'Value B', activitySelector: '.flame' }
     ])
       expect(
         monitorSettingsSchema.safeParse({

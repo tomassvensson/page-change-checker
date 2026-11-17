@@ -478,16 +478,12 @@ export class MonitorJournal {
         { owner: string } | undefined;
       if (row?.owner !== owner) throw new Error('Delivery claim ownership was lost');
       this.delivery(id, success, message, now);
+      const failureState = failureClass === 'payload' ? 'quarantined' : 'pending';
       this.db
         .prepare(
           `UPDATE monitor_outbox SET owner=NULL,lease_until=NULL,state=?,failure_class=?,next_attempt=? WHERE id=?`
         )
-        .run(
-          success ? 'delivered' : failureClass === 'payload' ? 'quarantined' : 'pending',
-          failureClass,
-          retryAt,
-          id
-        );
+        .run(success ? 'delivered' : failureState, failureClass, retryAt, id);
     })();
   }
 

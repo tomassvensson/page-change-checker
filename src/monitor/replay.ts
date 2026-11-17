@@ -44,7 +44,7 @@ export function replayText(checks: CheckRecord[], filter: ReplayFilter) {
       valid: Boolean(valid),
       changed: Boolean(valid && before !== undefined && before !== filtered),
       originalStatus: check.status,
-      reason: invalid ?? (!valid ? 'Unvalidated or required content absent' : null)
+      reason: invalid ?? (valid ? null : 'Unvalidated or required content absent')
     };
   });
 }
@@ -63,41 +63,23 @@ export function replayRules(entries: ReplayEntry[], proposed?: MonitorRule[]) {
   const baselines = new Map<string, Record<string, Observation>>();
   return entries.map((entry) => {
     const rules = proposed ?? entry.rules;
-    const reinput = (evidence: PageEvidence) => ({
-      ...evidence,
-      inputs: Object.fromEntries(
-        rules.map((rule) => {
-          const old = entry.rules.find((r) => r.id === rule.id);
-          const scoped = 'selector' in rule;
-          const comparable =
-            !scoped ||
-            (old && 'selector' in old && old.selector === rule.selector && old.kind === rule.kind);
-          return [
-            rule.id,
-            comparable
-              ? (evidence.inputs[rule.id] ?? {})
-              : { error: 'Proposed scope was not archived; recapture required.' }
-          ];
-        })
-      )
-    });
     const prior = baselines.get(entry.target) ?? {};
-    const first = reinput(entry.firstEvidence),
-      second = reinput(entry.evidence);
+    const first = reinputEvidence(entry, rules, entry.firstEvidence),
+      second = reinputEvidence(entry, rules, entry.evidence);
     const initial = evaluateEvidence(rules, first, prior);
     const decisions =
-      entry.firstEvidence.at !== entry.evidence.at
-        ? confirmEvidence(rules, first, second, prior)
-        : initial.map((d) => ({
+      entry.firstEvidence.at === entry.evidence.at
+        ? initial.map((d) => ({
             ...d,
             confirmed: d.valid && !d.initial && !d.rebaselined && !d.changed
-          }));
+          }))
+        : confirmEvidence(rules, first, second, prior);
     baselines.set(entry.target, { ...prior, ...acceptedObservations(decisions) });
     return { target: entry.target, evidenceId: entry.evidenceId, at: entry.evidence.at, decisions };
   });
 }
 
-if (process.argv[1]?.replace(/\\/g, '/').endsWith('/monitor/replay.js')) {
+if (process.argv[1]?.replaceAll('\\', '/').endsWith('/monitor/replay.js')) {
   const [, , evidencePath, filterPath] = process.argv;
   if (!evidencePath || !filterPath)
     throw new Error('Usage: node dist/src/monitor/replay.js evidence.json filter.json');
@@ -110,4 +92,25 @@ if (process.argv[1]?.replace(/\\/g, '/').endsWith('/monitor/replay.js')) {
   )
     throw new Error('Invalid replay input');
   console.log(JSON.stringify(replayText(checks, filter), null, 2));
+}
+
+function reinputEvidence(entry: ReplayEntry, rules: MonitorRule[], evidence: PageEvidence) {
+  return {
+    ...evidence,
+    inputs: Object.fromEntries(
+      rules.map((rule) => {
+        const old = entry.rules.find((r) => r.id === rule.id);
+        const scoped = 'selector' in rule;
+        const comparable =
+          !scoped ||
+          (old && 'selector' in old && old.selector === rule.selector && old.kind === rule.kind);
+        return [
+          rule.id,
+          comparable
+            ? (evidence.inputs[rule.id] ?? {})
+            : { error: 'Proposed scope was not archived; recapture required.' }
+        ];
+      })
+    )
+  };
 }

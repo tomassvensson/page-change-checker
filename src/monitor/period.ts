@@ -89,7 +89,7 @@ export function periodSummary(
         .sort((a, b) => a.endedAt.localeCompare(b.endedAt)),
       last = all.at(-1),
       latest = rows.at(-1);
-    const valid = all.filter((c) => c.validated).at(-1),
+    const valid = all.findLast((c) => c.validated),
       payload = last?.payload as Result | undefined;
     const changed =
       rows.some((c) => c.status === 'alert' && c.validated) ||
@@ -158,7 +158,7 @@ export function periodSummary(
 }
 export type PeriodRow = ReturnType<typeof periodSummary>[number];
 const escape = (value: string | number | null | undefined) =>
-  String(value ?? '—').replace(
+  String(value ?? '—').replaceAll(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
   );
@@ -191,13 +191,10 @@ export function renderReportOverview(rows: PeriodRow[]) {
 export function renderPeriodSummary(rows: PeriodRow[], now: string) {
   const age = (value: string) => {
     const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(value)) / 60000));
-    return minutes < 1
-      ? '<1m'
-      : minutes < 60
-        ? `${minutes}m`
-        : minutes < 1440
-          ? `${Math.floor(minutes / 60)}h`
-          : `${Math.floor(minutes / 1440)}d`;
+    if (minutes < 1) return '<1m';
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+    return `${Math.floor(minutes / 1440)}d`;
   };
   const time = (value: string | null) =>
     value

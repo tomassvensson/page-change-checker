@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { pageValidity, ruleVersion } from './journal.js';
 import { semanticRowDiff } from './semantic.js';
 
-const bounded = (min: number, max: number) => z.number().finite().min(min).max(max);
+const bounded = (min: number, max: number) => z.number().min(min).max(max);
 const common = {
   id: z.string().min(1),
   message: z.string().min(1),
@@ -148,17 +148,17 @@ export function extractStatistic(text: string, label: string): number | null {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sameLine = new RegExp(`^([\\d\\s.,]+)\\s+${escaped}$`, 'iu');
+  const escaped = label.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const sameLine = new RegExp(String.raw`^([\d\s.,]+)\s+${escaped}$`, 'iu');
   const parse = (value: string) => {
     if (!/^[\d\s.,]+$/.test(value)) return null;
-    const n = Number(value.replace(/\D/g, ''));
+    const n = Number(value.replaceAll(/\D/g, ''));
     return Number.isSafeInteger(n) && n <= 2147483647 ? n : null;
   };
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].localeCompare(label, undefined, { sensitivity: 'accent' }) === 0 && i > 0)
       return parse(lines[i - 1]);
-    const match = lines[i].match(sameLine);
+    const match = sameLine.exec(lines[i]);
     if (match) return parse(match[1]);
   }
   return null;
@@ -221,7 +221,9 @@ function inputValue(
   const input = evidence.inputs[rule.id];
   if (input?.error) return input;
   if (rule.kind === 'mustContainText') {
-    const present = evidence.text.replace(/\s+/g, ' ').includes(rule.text.replace(/\s+/g, ' '));
+    const present = evidence.text
+      .replaceAll(/\s+/g, ' ')
+      .includes(rule.text.replaceAll(/\s+/g, ' '));
     return { value: String(present), active: !present };
   }
   if (rule.kind === 'statMustEqual' || rule.kind === 'statEqualsTriggers') {
@@ -240,22 +242,82 @@ function inputValue(
       .map((l) => l.trim())
       .filter((l) => l && !rule.ignoredLines?.includes(l))
       .join('\n');
-    return { value: rule.normalizeWhitespace ? value.replace(/\s+/g, ' ').trim() : value };
+    return { value: rule.normalizeWhitespace ? value.replaceAll(/\s+/g, ' ').trim() : value };
   }
   return input;
 }
 
+function invalidEvidence(evidence: PageEvidence) {
+  if (evidence.httpStatus !== null && evidence.httpStatus >= 400)
+    return `HTTP ${evidence.httpStatus}`;
+  if (evidence.authentication === 'unverified') return 'Authentication could not be validated.';
+  return pageValidity(evidence);
+}
+function visualOptions(rule: MonitorRule) {
+  if (rule.kind === 'visualSnapshot' || rule.kind === 'imageSnapshot') return rule;
+  return {};
+}
+function observationChanged(
+  previous: Observation | undefined,
+  input: RuleInput,
+  rule: MonitorRule,
+  text: string
+) {
+  if (!previous) return false;
+  if (input.signature && previous.signature)
+    return compareSignatures(previous.signature, input.signature, visualOptions(rule)).changed;
+  return previous.value !== text;
+}
+function changedRows(
+  rule: MonitorRule,
+  previous: Observation | undefined,
+  different: boolean,
+  text: string
+) {
+  if (!previous || !different || rule.kind !== 'selectorContentSnapshot') return undefined;
+  try {
+    return semanticRowDiff(previous.value, text);
+  } catch {
+    return undefined;
+  }
+}
+function observedDescription(
+  rule: MonitorRule,
+  input: RuleInput,
+  rows: ReturnType<typeof semanticRowDiff> | undefined,
+  text: string
+) {
+  if (rows)
+    return `Container changed: ${rows.added.length} rows added, ${rows.removed.length} removed, ${rows.changed.length} changed; form/text/link changes are included.`;
+  if (input.signature) return 'Visible rendering changed.';
+  if (rule.kind === 'mustContainText') return 'Required text was not present.';
+  return text;
+}
+function buildRuleAlert(
+  rule: MonitorRule,
+  input: RuleInput,
+  observation: Observation,
+  previous: Observation | undefined,
+  rows: ReturnType<typeof semanticRowDiff> | undefined,
+  text: string
+): RuleAlert {
+  const alert: RuleAlert = {
+    id: rule.id,
+    message: rule.message,
+    observed: observedDescription(rule, input, rows, text),
+    fingerprint: observation.hash
+  };
+  if (rows) alert.rowChanges = rows;
+  if (previous && (rule.kind === 'visibleTextSnapshot' || rule.kind === 'selectorContentSnapshot'))
+    alert.textDiff = { oldText: previous.value, newText: text };
+  return alert;
+}
 export function evaluateEvidence(
   rules: MonitorRule[],
   evidence: PageEvidence,
   baseline: Record<string, Observation> = {}
 ): RuleDecision[] {
-  const invalid =
-    evidence.httpStatus !== null && evidence.httpStatus >= 400
-      ? `HTTP ${evidence.httpStatus}`
-      : evidence.authentication === 'unverified'
-        ? 'Authentication could not be validated.'
-        : pageValidity(evidence);
+  const invalid = invalidEvidence(evidence);
   return rules.map((rule) => {
     const prior = baseline[rule.id],
       version = ruleDefinitionVersion(rule),
@@ -285,43 +347,12 @@ export function evaluateEvidence(
       active: value.active
     };
     const previous = prior?.version === version ? prior : undefined;
-    const different =
-      previous &&
-      (value.signature && previous.signature
-        ? compareSignatures(
-            previous.signature,
-            value.signature,
-            rule.kind === 'visualSnapshot' || rule.kind === 'imageSnapshot' ? rule : {}
-          ).changed
-        : previous.value !== text);
+    const different = observationChanged(previous, value, rule, text);
     const active = value.active ?? Boolean(different),
       changed = Boolean(active && (!previous || different));
-    let rowChanges: ReturnType<typeof semanticRowDiff> | undefined;
-    if (previous && different && rule.kind === 'selectorContentSnapshot') {
-      try {
-        rowChanges = semanticRowDiff(previous.value, text);
-      } catch {
-        /* Legacy unstructured evidence remains a text comparison. */
-      }
-    }
+    const rowChanges = changedRows(rule, previous, different, text);
     const alert = active
-      ? {
-          id: rule.id,
-          message: rule.message,
-          observed: rowChanges
-            ? `Container changed: ${rowChanges.added.length} rows added, ${rowChanges.removed.length} removed, ${rowChanges.changed.length} changed; form/text/link changes are included.`
-            : value.signature
-              ? 'Visible rendering changed.'
-              : rule.kind === 'mustContainText'
-                ? 'Required text was not present.'
-                : text,
-          fingerprint: observation.hash,
-          ...(rowChanges ? { rowChanges } : {}),
-          ...(previous &&
-          (rule.kind === 'visibleTextSnapshot' || rule.kind === 'selectorContentSnapshot')
-            ? { textDiff: { oldText: previous.value, newText: text } }
-            : {})
-        }
+      ? buildRuleAlert(rule, value, observation, previous, rowChanges, text)
       : undefined;
     return {
       id: rule.id,
@@ -357,11 +388,8 @@ export function confirmEvidence(
       a.observation &&
       b.observation &&
       (a.observation.signature && b.observation.signature
-        ? !compareSignatures(
-            a.observation.signature,
-            b.observation.signature,
-            rule.kind === 'visualSnapshot' || rule.kind === 'imageSnapshot' ? rule : {}
-          ).changed
+        ? !compareSignatures(a.observation.signature, b.observation.signature, visualOptions(rule))
+            .changed
         : a.observation.value === b.observation.value);
     if (!equal)
       return {

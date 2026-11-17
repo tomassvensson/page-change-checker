@@ -123,7 +123,7 @@ describe('operational incident regression matrix', () => {
     journal.enqueue('event', { html: 'original evidence' });
     journal.enqueue('event', { html: 'must not replace' });
     journal.delivery('event', false, 'SMTP timeout');
-    journal.spool('sample', { valueA: 100 });
+    journal.spool('sample', { metricA: 100 });
     journal.close();
     journal = new MonitorJournal(path);
     expect(JSON.parse(journal.pending()[0].payload)).toEqual({ html: 'original evidence' });

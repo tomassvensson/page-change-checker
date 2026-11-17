@@ -4,17 +4,7 @@ export async function runTargetBatch<
   T extends { id: string; url: string },
   R,
   C extends { close: () => Promise<void> }
->(
-  targets: T[],
-  runtime: {
-    open: (origin: string, targets: T[]) => Promise<C>;
-    inspect: (context: C, target: T) => Promise<R>;
-    failure: (target: T, error: unknown) => R;
-    persist: (target: T, result: R) => Promise<void> | void;
-    deadline?: number;
-    now?: () => number;
-  }
-) {
+>(targets: T[], runtime: BatchRuntime<T, R, C>) {
   const grouped = new Map<string, T[]>();
   for (const target of targets) {
     const origin = new URL(target.url).origin;
@@ -24,17 +14,8 @@ export async function runTargetBatch<
   }
   const results: R[] = [];
   for (const [origin, items] of grouped) {
-    let context: C;
-    try {
-      context = await runtime.open(origin, items);
-    } catch (error) {
-      for (const target of items) {
-        const result = runtime.failure(target, error);
-        await runtime.persist(target, result);
-        results.push(result);
-      }
-      continue;
-    }
+    const context = await openBatchContext(origin, items, runtime, results);
+    if (!context) continue;
     try {
       for (const target of items) {
         if (runtime.deadline && (runtime.now ?? Date.now)() > runtime.deadline)
@@ -53,4 +34,30 @@ export async function runTargetBatch<
     }
   }
   return results;
+}
+
+type BatchRuntime<T, R, C> = {
+  open: (origin: string, targets: T[]) => Promise<C>;
+  inspect: (context: C, target: T) => Promise<R>;
+  failure: (target: T, error: unknown) => R;
+  persist: (target: T, result: R) => Promise<void> | void;
+  deadline?: number;
+  now?: () => number;
+};
+async function openBatchContext<T, R, C>(
+  origin: string,
+  items: T[],
+  runtime: BatchRuntime<T, R, C>,
+  results: R[]
+) {
+  try {
+    return await runtime.open(origin, items);
+  } catch (error) {
+    for (const target of items) {
+      const result = runtime.failure(target, error);
+      await runtime.persist(target, result);
+      results.push(result);
+    }
+    return null;
+  }
 }

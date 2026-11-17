@@ -35,10 +35,16 @@ export function activityFromRecord(
 }
 
 /** Observe the responses the configured page already makes. Never issue an API
- * request, collect another user's data, or infer practice from valueB length. */
+ * request, collect another user's data, or infer activity from valueB length. */
 export function watchRecordActivity(
   page: Page,
-  options: { username: string; responseUrlContains: string; datePath: string; timeZone?: string }
+  options: {
+    username: string;
+    responseUrlContains: string;
+    datePath: string;
+    timeZone?: string;
+    normalizePayload?: (record: unknown) => unknown;
+  }
 ) {
   let record: unknown = null,
     active = true;
@@ -51,7 +57,8 @@ export function watchRecordActivity(
       return;
     const task = (async () => {
       try {
-        const body = (await response.json()) as unknown;
+        const raw = (await response.json()) as unknown;
+        const body = options.normalizePayload?.(raw) ?? raw;
         if (
           active &&
           body &&
@@ -79,13 +86,7 @@ export function watchRecordActivity(
             timer = setTimeout(resolve, 5000);
           })
         ]);
-        return activityFromRecord(
-          record,
-          options.username,
-          options.datePath,
-          at,
-          options.timeZone
-        );
+        return activityFromRecord(record, options.username, options.datePath, at, options.timeZone);
       } finally {
         clearTimeout(timer);
       }

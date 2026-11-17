@@ -44,7 +44,7 @@ It is intentionally a single-machine tool. If you need distributed monitoring, u
 
 - **Price monitoring** — watch a `<span class="price">` on a retailer or airline page and be notified the instant the price changes.
 - **Job postings** — monitor a careers page for new or removed listings; the selector targets the listing container, so any addition or removal surfaces immediately.
-- **provider sellers** — watch a seller's profile page (e.g. `provider.de/pro/…`) for new or removed items using the item list selector.
+- **Resource monitoring** — compare a configured resource at `https://example.com/resource` using its selected content.
 - **Legal and regulatory pages** — track terms-of-service, privacy policies, or official regulatory announcements where even a single word change matters.
 - **Competitor pages** — watch a competitor's feature list, pricing table, or announcement banner for quiet updates.
 

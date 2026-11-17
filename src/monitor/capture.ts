@@ -89,56 +89,16 @@ export async function settleImages(page: Page, status: number | null, options: C
   if (options.requireLoadedImages) {
     const attempts = options.imageLoadAttempts ?? 2;
     for (let attempt = 0; attempt < attempts; attempt++) {
-      if (options.eagerLoadImages)
-        await page.evaluate(async () => {
-          for (const img of Array.from(document.images)) img.loading = 'eager';
-          const original = scrollY;
-          for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight) {
-            scrollTo(0, y);
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-          scrollTo(0, original);
-        });
+      if (options.eagerLoadImages) await page.evaluate(loadVisibleImages);
       let ready = false;
       try {
-        await page.waitForFunction(
-          (minimum) => {
-            const visible = Array.from(document.images).filter(
-              (img) => img.getClientRects().length && getComputedStyle(img).visibility !== 'hidden'
-            );
-            return (
-              visible.length >= minimum &&
-              visible.every((img) => img.complete && img.naturalWidth > 0)
-            );
-          },
-          options.minimumLoadedImages ?? 0,
-          { timeout: options.imageReadinessTimeoutMs ?? 30000 }
+        await page.waitForFunction(visibleImagesReady, options.minimumLoadedImages ?? 0, {
+          timeout: options.imageReadinessTimeoutMs ?? 30000
+        });
+        const states = await page.evaluate(
+          decodeVisibleImages,
+          options.imageDecodeTimeoutMs ?? 10000
         );
-        const states = await page.evaluate(async (timeout) => {
-          const images = Array.from(document.images).filter(
-            (img) => img.getClientRects().length && getComputedStyle(img).visibility !== 'hidden'
-          );
-          return Promise.all(
-            images.map(async (img) => {
-              let decoded = false,
-                timer: ReturnType<typeof setTimeout> | undefined;
-              try {
-                await Promise.race([
-                  img.decode(),
-                  new Promise((_, reject) => {
-                    timer = setTimeout(() => reject(new Error('decode timeout')), timeout);
-                  })
-                ]);
-                decoded = true;
-              } catch {
-                /* reported as failed readiness, not silently captured */
-              } finally {
-                clearTimeout(timer);
-              }
-              return { complete: img.complete, naturalWidth: img.naturalWidth, decoded };
-            })
-          );
-        }, options.imageDecodeTimeoutMs ?? 10000);
         ready = imagesReady(
           states.filter((s) => s.complete && s.naturalWidth > 0 && s.decoded).length,
           states.length,
@@ -155,9 +115,12 @@ export async function settleImages(page: Page, status: number | null, options: C
       await validate(page, status, options);
     }
   }
-  if (options.preScreenshotWaitMs) await page.waitForTimeout(options.preScreenshotWaitMs);
+  await pauseBeforeCapture(page, options.preScreenshotWaitMs);
   await validate(page, status, options);
   return status;
+}
+async function pauseBeforeCapture(page: Page, delay?: number) {
+  if (delay) await page.waitForTimeout(delay);
 }
 
 export async function signatureFromPng(
@@ -185,7 +148,7 @@ export async function signatureFromPng(
       const data = ctx.getImageData(0, 0, width, height).data;
       let rgb = '';
       for (let i = 0; i < data.length; i += 4)
-        rgb += String.fromCharCode(data[i], data[i + 1], data[i + 2]);
+        rgb += String.fromCodePoint(data[i], data[i + 1], data[i + 2]);
       return { title, width, height, pixels: btoa(rgb), sourceHeight: img.height };
     },
     {
@@ -216,25 +179,7 @@ async function captureOnce(
   const title = options.title?.(await page.title()) ?? (await page.title());
   // Scoped screenshots can scroll the document and trigger lazy content. Take
   // them before reading text, then require the final full-page PNG to agree.
-  const signatures: Record<string, Signature> = {};
-  for (const rule of rules) {
-    if (rule.kind !== 'visualSnapshot' && rule.kind !== 'imageSnapshot') continue;
-    try {
-      const locator = page.locator(rule.selector ?? 'body').first();
-      await locator.waitFor({
-        state: 'visible',
-        timeout: rule.timeoutMs ?? options.timeoutMs ?? 30000
-      });
-      signatures[rule.id] = await signatureFromPng(
-        page,
-        await locator.screenshot({ animations: 'disabled' }),
-        title,
-        rule
-      );
-    } catch {
-      /* missing scoped input is diagnosed below */
-    }
-  }
+  const signatures = await captureSignatures(page, rules, title, options);
   // Scoped screenshots and selector waits can outlive a session or navigation.
   // Validate the actual text being compared, not just the page before those waits.
   const { text } = await validate(page, status, options);
@@ -251,33 +196,7 @@ async function captureOnce(
     (await page
       .locator('#challenge-running:visible,[data-testid="challenge-page"]:visible')
       .count()) > 0;
-  for (const rule of rules) {
-    try {
-      if (
-        rule.kind === 'mustContainText' ||
-        rule.kind === 'statMustEqual' ||
-        rule.kind === 'statEqualsTriggers'
-      )
-        continue;
-      const locator = page.locator(rule.selector ?? 'body').first();
-      await locator.waitFor({
-        state: 'visible',
-        timeout: rule.timeoutMs ?? options.timeoutMs ?? 30000
-      });
-      if (rule.kind === 'visibleTextSnapshot')
-        evidence.inputs[rule.id] = { value: await locator.innerText() };
-      else if (rule.kind === 'selectorContentSnapshot')
-        evidence.inputs[rule.id] = { value: await semanticSnapshot(locator, rule) };
-      else {
-        if (!signatures[rule.id]) throw new Error('Missing image input');
-        evidence.inputs[rule.id] = { signature: signatures[rule.id] };
-      }
-    } catch {
-      evidence.inputs[rule.id] = {
-        error: 'Required element was not found or could not be captured.'
-      };
-    }
-  }
+  await populateRuleInputs(page, rules, evidence, signatures, options);
   evidence.expectedContentPresent = Object.values(evidence.inputs).some(
     (input) => input.value !== undefined || input.signature !== undefined
   );
@@ -289,28 +208,7 @@ async function captureOnce(
   const final = await validate(page, status, options);
   let contentChanged = final.text !== text || final.title !== title;
   if (scopedTextOnly) {
-    const inputs: PageEvidence['inputs'] = {};
-    for (const rule of rules) {
-      try {
-        inputs[rule.id] = {
-          value: await page
-            .locator(rule.selector ?? 'body')
-            .first()
-            .innerText({ timeout: options.timeoutMs ?? 30000 })
-        };
-      } catch {
-        inputs[rule.id] = { error: 'Required rule input was not captured.' };
-      }
-    }
-    const before = evaluateEvidence(rules, evidence);
-    const after = evaluateEvidence(rules, { ...evidence, text: final.text, inputs });
-    contentChanged = before.some(
-      (decision, index) =>
-        decision.valid !== after[index].valid ||
-        decision.observation?.hash !== after[index].observation?.hash
-    );
-    evidence.text = final.text;
-    evidence.title = final.title;
+    contentChanged = await verifyTextCapture(page, rules, evidence, final, options);
   }
   if (page.url() !== evidence.finalUrl || contentChanged)
     throw new CaptureConsistencyError(
@@ -444,4 +342,143 @@ export async function annotateChanges(
     }
   );
   return Buffer.from(base64, 'base64');
+}
+
+async function captureSignatures(
+  page: Page,
+  rules: MonitorRule[],
+  title: string,
+  options: CaptureOptions
+) {
+  const signatures: Record<string, Signature> = {};
+  for (const rule of rules) {
+    if (rule.kind !== 'visualSnapshot' && rule.kind !== 'imageSnapshot') continue;
+    try {
+      const locator = page.locator(rule.selector ?? 'body').first();
+      await locator.waitFor({
+        state: 'visible',
+        timeout: rule.timeoutMs ?? options.timeoutMs ?? 30000
+      });
+      signatures[rule.id] = await signatureFromPng(
+        page,
+        await locator.screenshot({ animations: 'disabled' }),
+        title,
+        rule
+      );
+    } catch {
+      /* missing scoped input is diagnosed below */
+    }
+  }
+  return signatures;
+}
+
+async function populateRuleInputs(
+  page: Page,
+  rules: MonitorRule[],
+  evidence: PageEvidence,
+  signatures: Record<string, Signature>,
+  options: CaptureOptions
+) {
+  for (const rule of rules) {
+    try {
+      if (
+        rule.kind === 'mustContainText' ||
+        rule.kind === 'statMustEqual' ||
+        rule.kind === 'statEqualsTriggers'
+      )
+        continue;
+      const locator = page.locator(rule.selector ?? 'body').first();
+      await locator.waitFor({
+        state: 'visible',
+        timeout: rule.timeoutMs ?? options.timeoutMs ?? 30000
+      });
+      if (rule.kind === 'visibleTextSnapshot')
+        evidence.inputs[rule.id] = { value: await locator.innerText() };
+      else if (rule.kind === 'selectorContentSnapshot')
+        evidence.inputs[rule.id] = { value: await semanticSnapshot(locator, rule) };
+      else {
+        if (!signatures[rule.id]) throw new Error('Missing image input');
+        evidence.inputs[rule.id] = { signature: signatures[rule.id] };
+      }
+    } catch {
+      evidence.inputs[rule.id] = {
+        error: 'Required element was not found or could not be captured.'
+      };
+    }
+  }
+}
+
+async function verifyTextCapture(
+  page: Page,
+  rules: Extract<MonitorRule, { kind: 'visibleTextSnapshot' }>[],
+  evidence: PageEvidence,
+  final: Awaited<ReturnType<typeof validate>>,
+  options: CaptureOptions
+) {
+  const inputs: PageEvidence['inputs'] = {};
+  for (const rule of rules) {
+    try {
+      inputs[rule.id] = {
+        value: await page
+          .locator(rule.selector ?? 'body')
+          .first()
+          .innerText({ timeout: options.timeoutMs ?? 30000 })
+      };
+    } catch {
+      inputs[rule.id] = { error: 'Required rule input was not captured.' };
+    }
+  }
+  const before = evaluateEvidence(rules, evidence);
+  const after = evaluateEvidence(rules, { ...evidence, text: final.text, inputs });
+  const contentChanged = before.some(
+    (decision, index) =>
+      decision.valid !== after[index].valid ||
+      decision.observation?.hash !== after[index].observation?.hash
+  );
+  evidence.text = final.text;
+  evidence.title = final.title;
+  return contentChanged;
+}
+
+async function loadVisibleImages() {
+  for (const img of Array.from(document.images)) img.loading = 'eager';
+  const original = scrollY;
+  for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight) {
+    scrollTo(0, y);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  scrollTo(0, original);
+}
+
+function visibleImagesReady(minimum: number) {
+  const visible = Array.from(document.images).filter(
+    (img) => img.getClientRects().length && getComputedStyle(img).visibility !== 'hidden'
+  );
+  return visible.length >= minimum && visible.every((img) => img.complete && img.naturalWidth > 0);
+}
+
+async function decodeVisibleImages(timeout: number) {
+  const images = Array.from(document.images).filter(
+    (img) => img.getClientRects().length && getComputedStyle(img).visibility !== 'hidden'
+  );
+  return Promise.all(
+    images.map(async (img) => {
+      let decoded = false,
+        timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          img.decode(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('decode timeout')), timeout);
+          })
+        ]);
+        decoded = true;
+      } catch {
+        /* reported as failed readiness, not silently captured */
+      } finally {
+        clearTimeout(timer);
+      }
+      return { complete: img.complete, naturalWidth: img.naturalWidth, decoded };
+    })
+  );
 }

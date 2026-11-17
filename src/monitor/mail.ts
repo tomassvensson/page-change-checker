@@ -7,6 +7,10 @@ import { dailyDiagnostics, dayKey } from './journal.js';
 import type { CheckRecord, MonitorJournal } from './journal.js';
 import { periodSummary, renderPeriodSummary, renderReportOverview } from './period.js';
 import type { PeriodTarget } from './period.js';
+function describeAlert(alert: NonNullable<EvidenceResult['alerts']>[number]) {
+  const rows = alert.rowChanges ? '\nRow changes:\n' + JSON.stringify(alert.rowChanges) : '';
+  return `${alert.message}: ${alert.observed}${rows}`;
+}
 
 function imagePresentation(changed: boolean, recovered: boolean, index: number) {
   if (changed)
@@ -63,7 +67,7 @@ export interface FrozenMail {
 }
 const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const escape = (v: string | number | null | undefined) =>
-  String(v ?? '').replace(
+  String(v ?? '').replaceAll(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
   );
@@ -72,18 +76,19 @@ export function renderTextChangeDiff(oldText: string | null | undefined, newText
   const rows: { text: string; html: string }[] = [];
   const parts = diffLines(oldText ?? '', newText);
   const addLineRows = (value: string, sign: '+' | '-') => {
-    const normalized = value.replace(/\r\n/g, '\n').replace(/\n$/, '');
+    const normalized = value.replaceAll('\r\n', '\n').replace(/\n$/, '');
     for (const line of normalized.split('\n'))
       rows.push({
         text: `${sign} ${line}`,
         html: `<span style="display:block;background:${sign === '+' ? '#dcfce7' : '#fee2e2'};color:${sign === '+' ? '#14532d' : '#7f1d1d'}">${sign} ${escape(line)}</span>`
       });
   };
-  for (let i = 0; i < parts.length; i++) {
+  let i = 0;
+  while (i < parts.length) {
     const part = parts[i];
     if (part.removed && parts[i + 1]?.added) {
-      const before = part.value.replace(/\r\n/g, '\n');
-      const after = parts[i + 1].value.replace(/\r\n/g, '\n');
+      const before = part.value.replaceAll('\r\n', '\n');
+      const after = parts[i + 1].value.replaceAll('\r\n', '\n');
       if (Math.max(before.length, after.length) > 160) {
         const words = diffWordsWithSpace(before, after);
         const context = (value: string, index: number) => {
@@ -94,13 +99,11 @@ export function renderTextChangeDiff(oldText: string | null | undefined, newText
         };
         rows.push({
           text: words
-            .map((word, index) =>
-              word.added
-                ? `{+${word.value}+}`
-                : word.removed
-                  ? `[-${word.value}-]`
-                  : context(word.value, index)
-            )
+            .map((word, index) => {
+              if (word.added) return `{+${word.value}+}`;
+              if (word.removed) return `[-${word.value}-]`;
+              return context(word.value, index);
+            })
             .join(''),
           html: `<span style="display:block">${words
             .map((word, index) => {
@@ -112,11 +115,12 @@ export function renderTextChangeDiff(oldText: string | null | undefined, newText
             })
             .join('')}</span>`
         });
-        i++;
+        i += 2;
         continue;
       }
     }
     if (part.added || part.removed) addLineRows(part.value, part.added ? '+' : '-');
+    i++;
   }
   return {
     text: rows.map((row) => row.text).join('\n'),
@@ -188,7 +192,7 @@ export function projectMonitorMail(
       .map((a) =>
         a.textDiff
           ? renderTextChangeDiff(a.textDiff.oldText, a.textDiff.newText).text
-          : `${a.message}: ${a.observed}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`
+          : describeAlert(a)
       )
       .join('\n');
   const conditionHtml = (result: EvidenceResult) =>
@@ -196,7 +200,7 @@ export function projectMonitorMail(
       .map((a) =>
         a.textDiff
           ? renderTextChangeDiff(a.textDiff.oldText, a.textDiff.newText).html
-          : `<pre>${escape(`${a.message}: ${a.observed}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`)}</pre>`
+          : `<pre>${escape(describeAlert(a))}</pre>`
       )
       .join('');
   const overview = renderReportOverview(summaries);
@@ -224,7 +228,7 @@ export function projectMonitorMail(
         const cid = `evidence-${digest([result.evidenceId, path]).slice(0, 24)}@monitor.local`;
         if (!attachments.some((a) => a.cid === cid))
           attachments.push({
-            filename: `${result.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${(result.evidenceId ?? 'capture').slice(0, 12)}-${index ? 'changes' : 'original'}.png`,
+            filename: `${result.id.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}-${(result.evidenceId ?? 'capture').slice(0, 12)}-${index ? 'changes' : 'original'}.png`,
             cid,
             content: readFileSync(path).toString('base64'),
             contentType: 'image/png'

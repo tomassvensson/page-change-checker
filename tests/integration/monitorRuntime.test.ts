@@ -81,9 +81,7 @@ it('fails closed on invalid commands, missing credentials/configuration and corr
     await runLocalMonitor(root, ['--replay-rules', proposed]);
     expect(process.exitCode).toBe(1);
     process.exitCode = previousExitCode;
-    await expect(runLocalMonitor(root, ['--test-login'])).rejects.toThrow(
-      'No automatic'
-    );
+    await expect(runLocalMonitor(root, ['--test-login'])).rejects.toThrow('No automatic');
     await expect(runLocalMonitor(root, ['--send-health-alert', 'Synthetic'])).rejects.toThrow(
       'not configured'
     );

@@ -11,7 +11,8 @@ unsafe values and unhandled promises. Persisted JSON is validated with Zod.
 
 `load → authenticate → validate-readiness → capture → confirm-change → save → notify`
 
-`sites.ts` owns provider-specific authentication and readiness policy. Browser
+`sites.ts` applies generic authentication and readiness policy; optional trusted
+local modules supply target-specific behavior without publishing their identity. Browser
 capture, independent confirmation, baselines, history and delivery remain shared.
 Preparation runs again on confirmation/recovery navigation. A login page, missing
 statistics, missing authenticated selector, offline browser page or HTTP failure
@@ -30,19 +31,36 @@ avoids taking a write lock merely to ask whether the monitor is healthy.
 
 ## Consolidation assessment
 
-| Implementations                                                     | Decision / next step                                                                                                                                                                                     |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Private JavaScript runner and typed monitor library                 | Moved the active orchestration into typed source; removed unreachable legacy copies during migration. Private configuration and browser profiles remain local.                                           |
-| Inline provider authentication versus browser authentication helper | Provider policy is now in `sites.ts`, using the same credential-login helper for all school modules.                                                                                                     |
-| First capture, confirmation and recovery navigation                 | All run the same preparation and validation path.                                                                                                                                                        |
-| Local and emailed period/current-health interpretation              | Both use `periodSummary`; email uses the same current-status overview in HTML and plain text.                                                                                                            |
-| CLI scraper (`src/browser`) versus private monitor (`src/monitor`)  | Still two orchestration stacks, with different configuration and database models. Share small validity/evidence primitives next; do not merge the workflows without a migration plan and contract tests. |
-| Notification modules versus monitor SMTP outbox                     | Generic notifier channels and the durable private digest are not interchangeable. Extract a shared SMTP transport factory/acceptance contract without removing durable delivery semantics.               |
-| Local HTML report versus email HTML                                 | Period tables and text diff are shared; layout, escaping and evidence presentation still have overlap. Extract presentation components after preserving their distinct link/attachment requirements.     |
-| Windows loop and watchdog helpers                                   | Both discover Node, invoke a runner and log failures. A shared invocation helper would prevent path/version drift. Keep watchdog process independence.                                                   |
-| PostgreSQL command execution in runtime versus integration helpers  | SQL generation is shared; process invocation can become an injected client. This would simplify deterministic timeout/recovery tests without changing native-Windows-only storage policy.                |
+| Implementations                                                    | Decision / next step                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Private JavaScript runner and typed monitor library                | Moved the active orchestration into typed source; removed unreachable legacy copies during migration. Private configuration and browser profiles remain local.                                           |
+| Authentication policies versus credential submission               | Private adapter policies use the same generic credential-login helper.                                                                                                                                   |
+| First capture, confirmation and recovery navigation                | All run the same preparation and validation path.                                                                                                                                                        |
+| Local and emailed period/current-health interpretation             | Both use `periodSummary`; email uses the same current-status overview in HTML and plain text.                                                                                                            |
+| CLI scraper (`src/browser`) versus private monitor (`src/monitor`) | Still two orchestration stacks, with different configuration and database models. Share small validity/evidence primitives next; do not merge the workflows without a migration plan and contract tests. |
+| Notification modules versus monitor SMTP outbox                    | Generic notifier channels and the durable private digest are not interchangeable. Extract a shared SMTP transport factory/acceptance contract without removing durable delivery semantics.               |
+| Local HTML report versus email HTML                                | Period tables and text diff are shared; layout, escaping and evidence presentation still have overlap. Extract presentation components after preserving their distinct link/attachment requirements.     |
+| Windows loop and watchdog helpers                                  | Both discover Node, invoke a runner and log failures. A shared invocation helper would prevent path/version drift. Keep watchdog process independence.                                                   |
+| PostgreSQL command execution in runtime versus integration helpers | SQL generation is shared; process invocation can become an injected client. This would simplify deterministic timeout/recovery tests without changing native-Windows-only storage policy.                |
 
-## NAS SonarQube
+## Private extensions and publication safety
+
+Set `adapterModule` to a trusted JavaScript module inside the private monitor
+directory. Its default export provides `policy(target)` and may normalize activity
+payloads or translate generated history SQL for an existing local schema. Modules
+are operator code, not a sandbox: never load an untrusted module. Keep their source,
+credentials, targets, browser profiles, deployment scripts and evidence outside Git.
+
+Public examples use reserved domains and generic resource names. A private
+`data/local-monitor/publication-policy.json` can define a `forbidden` string array
+without putting personal identifiers into the repository. Publication checks inspect
+the index before commits and all reachable history before pushes. CI enforces the
+generic file, credential and example-host rules; personal checks require the local
+policy. Historical clones, forks and host-managed review snapshots require separate
+cleanup after a history rewrite. Collaborators should reclone the cleaned repository
+instead of merging an old branch back into it.
+
+## NAS SonarQube analysis
 
 Set `SONAR_HOST_URL` and `SONAR_TOKEN` locally, then run `scripts/sonar-nas.ps1`.
 The scan reuses the repository's public-source exclusions: private settings,

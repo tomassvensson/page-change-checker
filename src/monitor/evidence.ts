@@ -19,8 +19,8 @@ function writeOnce(path: string, content: Buffer) {
  * is never pruned. No remote URL, filesystem path or executable input is accepted. */
 export class EvidenceStore {
   constructor(
-    private root: string,
-    private days = 90
+    private readonly root: string,
+    private readonly days = 90
   ) {
     mkdirSync(root, { recursive: true });
   }

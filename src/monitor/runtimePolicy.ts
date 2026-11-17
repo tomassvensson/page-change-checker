@@ -1,12 +1,25 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
+import type { Page } from 'playwright';
+
 import type { MonitorTarget } from './config.js';
 import { ruleVersion } from './journal.js';
-import type { MonitorResult, MonitorState, MonitorEvent } from './runtimeTypes.js';
+import { extractStatistic as sharedExtractStatistic } from './rules.js';
+import type { MonitorResult, MonitorState, MonitorEvent, ProgressConfig } from './runtimeTypes.js';
 import { authenticationFailure as websiteAuthenticationFailure } from './sites.js';
+import type { AdapterPolicy } from './sites.js';
 
 const defaultRetryDelayMs = 30000;
+export function formatEventSummary(event: MonitorEvent) {
+  const heading = event.title ? event.label + ' — ' + event.title : event.label;
+  return `${heading}: ${event.summary}`;
+}
+export function captureStatus(changed: boolean, confirmed: boolean, warnings: string[]) {
+  if (changed) return 'alert';
+  if (!confirmed) return 'inconclusive';
+  return warnings.length ? 'warning' : 'unchanged';
+}
 export function httpRetrySettings(target: MonitorTarget) {
   const configured = target.httpRetry;
   // Settings have already passed monitorSettingsSchema. Do not duplicate a
@@ -296,8 +309,14 @@ export function finishResult(
   };
 }
 
-export function authenticationFailureReason(target: MonitorTarget, finalUrl: string, text: string) {
-  return websiteAuthenticationFailure(target, finalUrl, text);
+export function authenticationFailureReason(
+  target: MonitorTarget,
+  finalUrl: string,
+  text: string,
+  signInOnly = false,
+  policy: AdapterPolicy = {}
+) {
+  return websiteAuthenticationFailure(target, finalUrl, text, signInOnly, policy);
 }
 
 export function printConsoleTables(results: MonitorResult[], reportPath: string) {
@@ -335,4 +354,46 @@ export function pageTitleCell(result: MonitorResult) {
 
 export function link(url: string, label: string) {
   return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+}
+
+export function extractMetricProgress(text: string, progress: ProgressConfig) {
+  return {
+    valueA: sharedExtractStatistic(text, progress?.metricALabel ?? 'Value A'),
+    valueB: sharedExtractStatistic(text, progress?.metricBLabel ?? 'Value B')
+  };
+}
+
+export function sqlLiteral(value: unknown) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+export async function firstVisibleTextMarker(page: Page, markers: string[]) {
+  for (const marker of markers) {
+    if (
+      await page
+        .getByText(String(marker), { exact: true })
+        .first()
+        .isVisible({ timeout: 500 })
+        .catch(() => false)
+    ) {
+      return String(marker);
+    }
+  }
+  return null;
+}
+
+export async function dismissCookieConsent(page: Page) {
+  const selectors = [
+    '#onetrust-accept-btn-handler',
+    '[data-testid="cookie-banner-accept"]',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Accept all")'
+  ];
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
+      await button.click({ timeout: 2_000 }).catch(() => undefined);
+      return;
+    }
+  }
 }

@@ -15,7 +15,7 @@ const rule: MonitorRule = {
 };
 const profile =
   '<title>Profile</title><main><p>1200</p><p>Value A</p><p>7</p><p>Value B</p></main>';
-const shell = '<title>Profile</title><aside>Learn Practice Profile</aside><main>Loading…</main>';
+const shell = '<title>Profile</title><aside>Learn activity Profile</aside><main>Loading…</main>';
 beforeAll(async () => {
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage();
@@ -131,7 +131,7 @@ describe('capture readiness and recovery before accepting content', () => {
   it('reauthenticates if a login screen replaces content during screenshot capture', async () => {
     const original = page.screenshot.bind(page);
     const spy = vi.spyOn(page, 'screenshot').mockImplementationOnce(async (options) => {
-      await page.setContent('<title>Login</title><main>Login Erstmalig anmelden</main>');
+      await page.setContent('<title>Login</title><main>Login Sign in</main>');
       return original(options);
     });
     let logins = 0;
@@ -145,8 +145,7 @@ describe('capture readiness and recovery before accepting content', () => {
             await page.setContent(profile);
             return 200;
           },
-          authenticate: (_url, text) =>
-            text.includes('Erstmalig anmelden') ? 'Login required' : null,
+          authenticate: (_url, text) => (text.includes('Sign in') ? 'Login required' : null),
           recoverAuthentication: async () => {
             logins++;
             await page.setContent(profile);

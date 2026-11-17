@@ -50,34 +50,30 @@ export function parseQueuedMail(payload: string) {
   }
 }
 
-const targetStateSchema = z
-  .object({
-    title: z.string().optional(),
-    status: z.string().optional(),
-    fingerprint: z.string().optional(),
-    checkedAt: z.string().nullable().optional(),
-    lastAttemptAt: z.string().nullable().optional(),
-    lastSuccessfulValidatedCheckAt: z.string().nullable().optional(),
-    lastInterestingChangeAt: z.string().nullable().optional(),
-    lastProgressObservedAt: z.string().nullable().optional(),
-    lastScreenshot: z.string().nullable().optional(),
-    lastDiffScreenshot: z.string().nullable().optional(),
-    observations: z.record(z.string(), z.unknown()).optional(),
-    rulesVersion: z.string().optional()
-  })
-  .passthrough();
-export const monitorStateSchema = z
-  .object({
-    checkedAt: z.string().nullable().optional(),
-    lastDailyEmailDate: z.string().nullable().optional(),
-    dailyJournalCutoff: z.string().nullable().optional(),
-    emailErrorFingerprint: z.string().nullable().optional(),
-    pendingEventEmailFingerprint: z.string().nullable().optional(),
-    inProgress: z.boolean().optional(),
-    runStartedAt: z.string().optional(),
-    targets: z.record(z.string(), targetStateSchema).default({})
-  })
-  .passthrough();
+const targetStateSchema = z.looseObject({
+  title: z.string().optional(),
+  status: z.string().optional(),
+  fingerprint: z.string().optional(),
+  checkedAt: z.string().nullable().optional(),
+  lastAttemptAt: z.string().nullable().optional(),
+  lastSuccessfulValidatedCheckAt: z.string().nullable().optional(),
+  lastInterestingChangeAt: z.string().nullable().optional(),
+  lastProgressObservedAt: z.string().nullable().optional(),
+  lastScreenshot: z.string().nullable().optional(),
+  lastDiffScreenshot: z.string().nullable().optional(),
+  observations: z.record(z.string(), z.unknown()).optional(),
+  rulesVersion: z.string().optional()
+});
+export const monitorStateSchema = z.looseObject({
+  checkedAt: z.string().nullable().optional(),
+  lastDailyEmailDate: z.string().nullable().optional(),
+  dailyJournalCutoff: z.string().nullable().optional(),
+  emailErrorFingerprint: z.string().nullable().optional(),
+  pendingEventEmailFingerprint: z.string().nullable().optional(),
+  inProgress: z.boolean().optional(),
+  runStartedAt: z.string().optional(),
+  targets: z.record(z.string(), targetStateSchema).default({})
+});
 export type MonitorState = z.infer<typeof monitorStateSchema>;
 export type DailyEmail = NonNullable<MonitorSettings['dailyEmail']>;
 export type HistoryConnection = {

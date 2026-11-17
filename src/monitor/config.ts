@@ -77,6 +77,7 @@ export const monitorSettingsSchema = z
       .refine((url) => new URL(url).protocol === 'https:')
       .optional(),
     intervalMinutes: z.number().int().min(5).max(1440),
+    adapterModule: z.string().min(1).optional(),
     maximumRunMinutes: z.number().int().min(5).max(120).optional(),
     headless: z.boolean(),
     navigationTimeoutMs: ms.optional(),
@@ -142,36 +143,7 @@ export const monitorSettingsSchema = z
           });
         rules.add(rule.id);
       }
-      const progress = target.progress;
-      if (
-        progress?.activityResponseUrlContains &&
-        (!progress.activityDatePath || !progress.activityTimeZone)
-      )
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Response activity requires an explicit date path and time zone',
-          path: ['targets', index, 'progress']
-        });
-      if (progress?.activityTimeZone) {
-        try {
-          new Intl.DateTimeFormat('en-CA', { timeZone: progress.activityTimeZone });
-        } catch {
-          ctx.addIssue({
-            code: 'custom',
-            message: 'Invalid activity time zone',
-            path: ['targets', index, 'progress', 'activityTimeZone']
-          });
-        }
-      }
-      if (
-        progress?.activitySelector &&
-        (!progress.activeValues?.length || !progress.inactiveValues?.length)
-      )
-        ctx.addIssue({
-          code: 'custom',
-          message: 'DOM activity requires explicit active and inactive values',
-          path: ['targets', index, 'progress']
-        });
+      validateProgressSettings(target.progress, index, ctx);
     }
     for (const id of settings.metricHistory?.activeTargetIds ?? [])
       if (!targets.has(id))
@@ -183,3 +155,39 @@ export const monitorSettingsSchema = z
   });
 export type MonitorSettings = z.infer<typeof monitorSettingsSchema>;
 export type MonitorTarget = MonitorSettings['targets'][number];
+
+function validateProgressSettings(
+  progress: z.infer<typeof targetSchema>['progress'],
+  index: number,
+  ctx: z.RefinementCtx
+) {
+  if (
+    progress?.activityResponseUrlContains &&
+    (!progress.activityDatePath || !progress.activityTimeZone)
+  )
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Response activity requires an explicit date path and time zone',
+      path: ['targets', index, 'progress']
+    });
+  if (progress?.activityTimeZone) {
+    try {
+      new Intl.DateTimeFormat('en-CA', { timeZone: progress.activityTimeZone });
+    } catch {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Invalid activity time zone',
+        path: ['targets', index, 'progress', 'activityTimeZone']
+      });
+    }
+  }
+  if (
+    progress?.activitySelector &&
+    (!progress.activeValues?.length || !progress.inactiveValues?.length)
+  )
+    ctx.addIssue({
+      code: 'custom',
+      message: 'DOM activity requires explicit active and inactive values',
+      path: ['targets', index, 'progress']
+    });
+}

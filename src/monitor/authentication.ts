@@ -13,6 +13,36 @@ interface LoginOptions {
   failure: (url: string, text: string) => string | null;
 }
 const sessions = new WeakMap<BrowserContext, { failure: string | null }>();
+function assertLoginOrigin(page: Page, expected: string) {
+  if (new URL(page.url()).origin !== expected)
+    throw new Error('Login origin changed; credentials not entered');
+}
+async function waitAuthenticated(page: Page, options: LoginOptions, expected: string) {
+  const end = Date.now() + options.timeoutMs;
+  while (Date.now() < end) {
+    assertLoginOrigin(page, expected);
+    const text = await page.locator('body').innerText({ timeout: options.timeoutMs });
+    if (!options.failure(page.url(), text)) return true;
+    await page.waitForTimeout(Math.min(500, Math.max(1, end - Date.now())));
+  }
+  return false;
+}
+async function submitLogin(page: Page, options: LoginOptions, expected: string, attempt: number) {
+  assertLoginOrigin(page, expected);
+  if (attempt > 0) {
+    const text = await page.locator('body').innerText({ timeout: options.timeoutMs });
+    if (!options.failure(page.url(), text)) return true;
+  }
+  const credential = options.credentials();
+  await page
+    .locator(options.usernameSelector)
+    .fill(credential.user, { timeout: options.timeoutMs });
+  await page
+    .locator(options.passwordSelector)
+    .fill(credential.password, { timeout: options.timeoutMs });
+  await page.locator(options.submitSelector).click({ timeout: options.timeoutMs });
+  return waitAuthenticated(page, options, expected);
+}
 export async function waitForContextClose(
   context: { once(event: 'close', listener: () => void): unknown; close(): Promise<void> },
   timeoutMs: number
@@ -51,31 +81,9 @@ export async function ensureCredentialsLogin(page: Page, options: LoginOptions) 
   let last = 'Login did not complete after retrying; credential values omitted';
   for (let i = 0; i < options.maxAttempts; i++) {
     try {
-      if (new URL(page.url()).origin !== expected)
-        throw new Error('Login page origin changed; credentials not entered');
-      // A delayed sign-in may have completed while the retry navigation ran.
-      // Reuse that session instead of trying to fill a form that has disappeared.
-      if (i > 0 && !options.failure(page.url(), await body())) {
+      if (await submitLogin(page, options, expected, i)) {
         sessions.set(page.context(), { failure: null });
         return true;
-      }
-      const credential = options.credentials();
-      await page
-        .locator(options.usernameSelector)
-        .fill(credential.user, { timeout: options.timeoutMs });
-      await page
-        .locator(options.passwordSelector)
-        .fill(credential.password, { timeout: options.timeoutMs });
-      await page.locator(options.submitSelector).click({ timeout: options.timeoutMs });
-      const end = Date.now() + options.timeoutMs;
-      while (Date.now() < end) {
-        if (new URL(page.url()).origin !== expected)
-          throw new Error('Origin changed after credential submit');
-        if (!options.failure(page.url(), await body())) {
-          sessions.set(page.context(), { failure: null });
-          return true;
-        }
-        await page.waitForTimeout(Math.min(500, Math.max(1, end - Date.now())));
       }
     } catch {
       last = 'Login failed or timed out; credential values omitted';

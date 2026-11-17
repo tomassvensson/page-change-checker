@@ -79,13 +79,13 @@
       },
       "selectors": [
         {
-          "cssPath": "div.my-large div.list-none a.items-center",
+          "cssPath": "#resource",
           "elementIndex": 0,
           "compareMode": "innerText",
-          "name": "Listing count",
+          "name": "Resource",
           "enabled": true,
           "ignorePatterns": ["\\d+ Anzeigen heute"],
-          "waitForSelector": "div.my-large",
+          "waitForSelector": "#resource",
           "waitForSelectorTimeoutMs": 10000,
           "normalizeOverride": {
             "trimWhitespace": true,

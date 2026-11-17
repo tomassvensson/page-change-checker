@@ -1,6 +1,16 @@
 import type { Page } from 'playwright';
 
 import type { NavigationAttempt } from './journal.js';
+function retryable(
+  status: number | null,
+  attempt: number,
+  maxAttempts: number,
+  statuses: number[] = []
+) {
+  return (
+    status !== null && (status >= 500 || statuses.includes(status)) && attempt + 1 < maxAttempts
+  );
+}
 
 export async function navigateWithRetries(
   page: Page,
@@ -32,11 +42,7 @@ export async function navigateWithRetries(
       await page.waitForTimeout(options.retryDelayMs);
       continue;
     }
-    if (
-      status !== null &&
-      (status >= 500 || options.statuses?.includes(status)) &&
-      i + 1 < options.maxAttempts
-    ) {
+    if (retryable(status, i, options.maxAttempts, options.statuses)) {
       await page.waitForTimeout(options.retryDelayMs);
       continue;
     }
