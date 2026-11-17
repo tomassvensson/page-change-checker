@@ -23,7 +23,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
-    "verify:static": "npm run lint && npm run format:check && npm run build",
+    "publication:check": "tsx src/tooling/check-publication.ts",
+    "verify:static": "npm run publication:check && npm run lint && npm run format:check && npm run build",
     "verify": "npm run audit:prod && npm run verify:static && npm run test:coverage && npm run test:e2e",
     "prepare": "husky"
   },

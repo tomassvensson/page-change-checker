@@ -1,1 +1,2 @@
+npm run publication:check -- --history
 npm run verify
