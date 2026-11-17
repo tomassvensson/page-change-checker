@@ -6,8 +6,9 @@ import { progressTransaction, progressSchemaMigration } from '../../src/monitor/
 
 /** Opt-in native PostgreSQL fault injection. Only session-local TEMP tables and
  * pg_temp functions are created; permanent monitoring history is untouched. */
-it.skipIf(!process.env.PCC_TEST_PSQL)(
+it(
   'rolls back a sample when event storage fails and recovers idempotently',
+  { skip: !process.env.PCC_TEST_PSQL, timeout: 30000 },
   () => {
     const baseline = {
       profile: 'synthetic-example',
@@ -78,6 +79,5 @@ it.skipIf(!process.env.PCC_TEST_PSQL)(
     expect(output).toContain('daily-activity:1');
     expect(output).toContain('interval:1');
     expect(output).toContain('timezone:1');
-  },
-  30000
+  }
 );

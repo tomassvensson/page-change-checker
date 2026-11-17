@@ -116,7 +116,7 @@ function hostMatchesAllowlist(hostname: string, allowedHosts: string[]): boolean
 
 function normalizeHostname(hostname: string): string {
   return hostname
-    .replace(/^\[|\]$/g, '')
+    .replace(/(?:^\[)|(?:\]$)/g, '')
     .toLowerCase()
     .replace(/\.$/, '');
 }

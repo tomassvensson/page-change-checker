@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -31,7 +31,9 @@ describe('acquireFileLock', () => {
     utimesSync(`${resolve(resource)}.lock`, new Date(0), new Date(0));
 
     const lock = acquireFileLock(resource);
+    expect(existsSync(`${resource}.lock`)).toBe(true);
     lock.release();
+    expect(existsSync(`${resource}.lock`)).toBe(false);
   });
 
   it('does not steal an initializing lock or a long-running live lock', () => {
