@@ -142,7 +142,7 @@ describe('parseConfig — negative paths', () => {
     const config = parseConfig({
       urls: [
         { url: 'https://example.com', selectors: [{ cssPath: '.x' }] },
-        { url: 'https://another.com', selectors: [{ cssPath: '.y' }] }
+        { url: 'https://another.example', selectors: [{ cssPath: '.y' }] }
       ]
     });
     expect(config.urls).toHaveLength(2);

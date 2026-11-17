@@ -42,7 +42,7 @@ export async function runForever(
 
   await new Promise<void>((resolveStopped) => {
     const timer = setInterval(() => {
-      void startRun();
+      startRun()?.catch(() => undefined);
     }, intervalMs);
     const stop = (): void => {
       clearInterval(timer);

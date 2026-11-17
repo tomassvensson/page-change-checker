@@ -89,5 +89,5 @@ function applyExtractRegex(content: string, pattern: string | null): string {
   const match = re.exec(content);
   if (!match) return content;
   // Use first capture group when present; fall back to full match.
-  return match[1] !== undefined ? match[1] : (match[0] ?? content);
+  return match[1] ?? match[0] ?? content;
 }

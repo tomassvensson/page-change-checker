@@ -27,6 +27,15 @@ describe('redaction helpers', () => {
     );
   });
 
+  it('redacts all secret query keys even when an earlier key is duplicated', () => {
+    const safe = new URL(
+      sanitizeTargetUrl('https://example.com/?token=a&token=b&password=c&safe=yes')
+    );
+    expect(safe.searchParams.getAll('token')).toEqual(['[REDACTED]']);
+    expect(safe.searchParams.get('password')).toBe('[REDACTED]');
+    expect(safe.searchParams.get('safe')).toBe('yes');
+  });
+
   it('redacts nested sensitive fields', () => {
     expect(
       redactFields({

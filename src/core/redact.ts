@@ -8,7 +8,7 @@ export function sanitizeTargetUrl(raw: string): string {
     const url = new URL(raw);
     url.username = '';
     url.password = '';
-    for (const key of [...url.searchParams.keys()]) {
+    for (const key of new Set(url.searchParams.keys())) {
       if (SENSITIVE_QUERY.test(key)) {
         url.searchParams.set(key, '[REDACTED]');
       }
@@ -35,12 +35,12 @@ export function truncateContent(value: string | null, maxLength: number): string
 
 export function sanitizeMessage(message: string): string {
   return message
-    .replace(/https?:\/\/[^\s"'<>]+/giu, (match) => sanitizeTargetUrl(match))
-    .replace(
+    .replaceAll(/https?:\/\/[^\s"'<>]+/giu, (match) => sanitizeTargetUrl(match))
+    .replaceAll(
       /\b(authorization|api[-_]?key|credential|password|secret|signature|token)\b(\s*[=:]\s*)([^\s,;&]+)/giu,
       '$1$2[REDACTED]'
     )
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]');
+    .replaceAll(/\bBearer\s+[a-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]');
 }
 
 export function redactFields(fields: Record<string, unknown>): Record<string, unknown> {

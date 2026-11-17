@@ -30,37 +30,7 @@ export function acquireFileLock(resourcePath: string): FileLock {
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fd = openSync(lockPath, 'wx', 0o600);
-      const token = randomUUID();
-      try {
-        writeFileSync(
-          fd,
-          JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() }),
-          'utf8'
-        );
-      } catch (error) {
-        closeSync(fd);
-        safeUnlink(lockPath);
-        throw error;
-      }
-      try {
-        chmodSync(lockPath, 0o600);
-      } catch {
-        // Windows and some mounted filesystems do not implement POSIX permissions.
-      }
-
-      let released = false;
-      return {
-        path: lockPath,
-        release(): void {
-          if (released) return;
-          released = true;
-          closeSync(fd);
-          if (readLockMetadata(lockPath)?.token === token) {
-            safeUnlink(lockPath);
-          }
-        }
-      };
+      return createOwnedLock(lockPath);
     } catch (error) {
       if (!isAlreadyExists(error)) throw error;
       const ownerPid = readLockMetadata(lockPath)?.pid ?? null;
@@ -133,4 +103,37 @@ function safeUnlink(path: string): void {
       throw error;
     }
   }
+}
+
+function createOwnedLock(lockPath: string): FileLock {
+  const fd = openSync(lockPath, 'wx', 0o600);
+  const token = randomUUID();
+  try {
+    writeFileSync(
+      fd,
+      JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() }),
+      'utf8'
+    );
+  } catch (error) {
+    closeSync(fd);
+    safeUnlink(lockPath);
+    throw error;
+  }
+  try {
+    chmodSync(lockPath, 0o600);
+  } catch {
+    // Windows and some mounted filesystems do not implement POSIX permissions.
+  }
+  let released = false;
+  return {
+    path: lockPath,
+    release(): void {
+      if (released) return;
+      released = true;
+      closeSync(fd);
+      if (readLockMetadata(lockPath)?.token === token) {
+        safeUnlink(lockPath);
+      }
+    }
+  };
 }

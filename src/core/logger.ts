@@ -57,12 +57,12 @@ function emit(
       ts: new Date().toISOString(),
       level,
       msg,
-      ...(runId !== undefined ? { runId } : {}),
+      ...(runId === undefined ? {} : { runId }),
       ...safeFields
     };
     out.write(JSON.stringify(entry) + '\n');
   } else {
-    const runPart = runId !== undefined ? ` [${runId}]` : '';
+    const runPart = runId === undefined ? '' : ` [${runId}]`;
     const fieldPart =
       safeFields !== undefined && Object.keys(safeFields).length > 0
         ? ' ' + JSON.stringify(safeFields)

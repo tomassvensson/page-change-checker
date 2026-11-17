@@ -71,7 +71,7 @@ const MIGRATIONS: Migration[] = [
 /** Create and integrity-check a transactionally consistent SQLite backup. */
 export function backupDatabase(db: SqliteDatabase, path: string): string {
   if (!existsSync(path) || path === ':memory:') return path;
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const ts = new Date().toISOString().replaceAll(/[:.]/g, '-');
   const dest = `${path}.backup.${ts}.${randomUUID().slice(0, 8)}`;
   db.prepare('VACUUM INTO ?').run(dest);
   try {
@@ -253,24 +253,7 @@ export function seedFromConfig(db: SqliteDatabase, config: AppConfig): void {
       const existing = findUrl.get(urlConfig.url) as { id: number };
       const urlId = inserted?.id ?? existing.id;
 
-      for (const selector of urlConfig.selectors) {
-        const norm = effectiveNormalize(config, selector);
-        const ignore = selector.ignorePatterns ?? [];
-        const initialContent =
-          selector.initialLastContent == null
-            ? null
-            : processContent(selector.initialLastContent, norm, ignore);
-
-        upsertTarget.get({
-          urlId,
-          name: selector.name ?? null,
-          cssPath: selector.cssPath,
-          elementIndex: selector.elementIndex,
-          compareMode: selector.compareMode,
-          lastContent: initialContent,
-          enabled: selector.enabled ? 1 : 0
-        });
-      }
+      seedSelectors(upsertTarget, urlId, config, urlConfig.selectors);
 
       const activeLoginCheckIds: number[] = [];
       for (const loginCheck of urlConfig.loginChecks ?? []) {
@@ -408,11 +391,14 @@ export function resolveUrls(
       const normalizeConfig: NormalizeConfig = selCfg.normalizeOverride
         ? { ...config.normalize, ...selCfg.normalizeOverride }
         : { ...config.normalize };
-      const lastContent = existing
-        ? existing.lastContent
-        : selCfg.initialLastContent === undefined
-          ? null
-          : processContent(selCfg.initialLastContent, normalizeConfig, selCfg.ignorePatterns ?? []);
+      let lastContent: string | null = null;
+      if (existing) lastContent = existing.lastContent;
+      else if (selCfg.initialLastContent !== undefined)
+        lastContent = processContent(
+          selCfg.initialLastContent,
+          normalizeConfig,
+          selCfg.ignorePatterns ?? []
+        );
 
       return [
         {
@@ -545,5 +531,31 @@ function assertExactlyOneRow(changes: number, entity: string, id: number): void 
     throw new Error(
       `Expected to update ${entity} ${id.toString()}, changed ${changes.toString()} rows`
     );
+  }
+}
+
+function seedSelectors(
+  upsertTarget: ReturnType<SqliteDatabase['prepare']>,
+  urlId: number,
+  config: AppConfig,
+  selectors: SelectorConfig[]
+) {
+  for (const selector of selectors) {
+    const norm = effectiveNormalize(config, selector);
+    const ignore = selector.ignorePatterns ?? [];
+    const initialContent =
+      selector.initialLastContent == null
+        ? null
+        : processContent(selector.initialLastContent, norm, ignore);
+
+    upsertTarget.get({
+      urlId,
+      name: selector.name ?? null,
+      cssPath: selector.cssPath,
+      elementIndex: selector.elementIndex,
+      compareMode: selector.compareMode,
+      lastContent: initialContent,
+      enabled: selector.enabled ? 1 : 0
+    });
   }
 }

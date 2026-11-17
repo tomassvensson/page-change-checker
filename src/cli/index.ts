@@ -158,33 +158,7 @@ async function runOnce(
   try {
     const db = openDatabase(config.databasePath);
     try {
-      if (!opts.dryRun) {
-        seedFromConfig(db, config);
-      }
-      let urls = resolveUrls(db, config, {
-        includeUnseeded: opts.dryRun
-      });
-      urls = applyUrlFilters(urls, opts);
-      const journal = !opts.dryRun && config.notifications ? new MonitorJournal(db) : null;
-      if (journal && config.notifications)
-        await deliverCliEvents(journal, config.notifications, config.network);
-      const results = await scrapeAll(db, config, urls, {
-        dryRun: opts.dryRun,
-        logger,
-        signal,
-        onObservation:
-          journal && config.notifications
-            ? (result) => recordCliObservation(journal, result, config.notifications!)
-            : undefined
-      });
-      if (opts.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else {
-        console.log(formatResults(results));
-      }
-      if (!opts.dryRun && config.notifications) {
-        if (journal) await deliverCliEvents(journal, config.notifications, config.network);
-      }
+      await runDatabaseOnce(db, config, opts, logger, signal);
     } finally {
       db.close();
     }
@@ -246,4 +220,39 @@ try {
     });
     process.exitCode = 1;
   }
+}
+
+async function runDatabaseOnce(
+  db: ReturnType<typeof openDatabase>,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  opts: RunOptions,
+  logger: ReturnType<typeof createRunLogger>,
+  signal: AbortSignal
+) {
+  if (!opts.dryRun) {
+    seedFromConfig(db, config);
+  }
+  let urls = resolveUrls(db, config, {
+    includeUnseeded: opts.dryRun
+  });
+  urls = applyUrlFilters(urls, opts);
+  const journal = !opts.dryRun && config.notifications ? new MonitorJournal(db) : null;
+  if (journal && config.notifications)
+    await deliverCliEvents(journal, config.notifications, config.network);
+  const results = await scrapeAll(db, config, urls, {
+    dryRun: opts.dryRun,
+    logger,
+    signal,
+    onObservation:
+      journal && config.notifications
+        ? (result) => recordCliObservation(journal, result, config.notifications!)
+        : undefined
+  });
+  if (opts.json) {
+    console.log(JSON.stringify(results, null, 2));
+  } else {
+    console.log(formatResults(results));
+  }
+  if (journal && config.notifications)
+    await deliverCliEvents(journal, config.notifications, config.network);
 }

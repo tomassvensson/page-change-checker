@@ -12,7 +12,7 @@ export const DEFAULT_NORMALIZE: NormalizeConfig = {
 export function normalizeText(text: string, config: NormalizeConfig): string {
   let result = text;
   if (config.trimWhitespace) result = result.trim();
-  if (config.collapseWhitespace) result = result.replace(/\s+/g, ' ');
+  if (config.collapseWhitespace) result = result.replaceAll(/\s+/g, ' ');
   if (config.caseInsensitive) result = result.toLowerCase();
   return result;
 }
@@ -28,7 +28,7 @@ export function applyIgnorePatterns(text: string, patterns: string[]): string {
   let result = text;
   for (const pattern of patterns) {
     try {
-      result = result.replace(new RegExp(pattern, 'gm'), '');
+      result = result.replaceAll(new RegExp(pattern, 'gm'), '');
     } catch {
       // Invalid regex — skip silently so a bad pattern does not abort the run.
     }

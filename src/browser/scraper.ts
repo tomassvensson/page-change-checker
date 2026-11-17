@@ -321,29 +321,7 @@ async function scrapeOne(
       await page.setViewportSize(loadedUrl.overrides.viewport);
     }
 
-    let response;
-    try {
-      response = await page.goto(loadedUrl.url.url, {
-        waitUntil: config.browser.waitUntil,
-        timeout: config.browser.timeoutMs
-      });
-      throwIfAborted(options.signal);
-    } catch (error) {
-      throwBlockedRequestError(networkState.blockedError);
-      if (isPlaywrightTimeout(error)) {
-        throw new NavigationTimeoutError(
-          sanitizeTargetUrl(loadedUrl.url.url),
-          config.browser.timeoutMs
-        );
-      }
-      throw error;
-    }
-
-    const httpStatus = response?.status() ?? null;
-    throwBlockedRequestError(networkState.blockedError);
-    if (httpStatus !== null && httpStatus >= 400) {
-      throw new HttpError(sanitizeTargetUrl(loadedUrl.url.url), httpStatus);
-    }
+    const httpStatus = await navigateForScrape(page, config, loadedUrl, options, networkState);
 
     try {
       await dismissCookieConsent(page, config);
@@ -596,12 +574,12 @@ async function configurePageNetworking(
     try {
       await guard.assertUrlAllowed(request.url(), true);
       const requestUrl = new URL(request.url());
-      const headers =
-        requestUrl.protocol === 'http:' || requestUrl.protocol === 'https:'
-          ? requestUrl.origin === targetOrigin
-            ? mergeHeaders(request.headers(), configuredHeaders)
-            : request.headers()
-          : request.headers();
+      let headers = request.headers();
+      if (
+        (requestUrl.protocol === 'http:' || requestUrl.protocol === 'https:') &&
+        requestUrl.origin === targetOrigin
+      )
+        headers = mergeHeaders(headers, configuredHeaders);
       await route.continue({ headers });
     } catch (error) {
       state.blockedError = error instanceof Error ? error : new Error(String(error));
@@ -628,8 +606,8 @@ async function captureChangeScreenshot(
     return undefined;
   }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const slug = new URL(loadedUrl.url.url).hostname.replace(/[^a-z0-9]/gi, '-');
+  const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+  const slug = new URL(loadedUrl.url.url).hostname.replaceAll(/[^a-z0-9]/gi, '-');
   const filename = `${slug}-${loadedUrl.url.id.toString()}-${timestamp}.png`;
   const screenshotPath = resolve(config.screenshot.dir, filename);
 
@@ -761,7 +739,7 @@ async function secureMkdir(path: string): Promise<void> {
 
 function profileDirectory(baseDir: string, origin: string): string {
   const url = new URL(origin);
-  const slug = `${url.protocol.replace(':', '')}-${url.host}`.replace(/[^a-z0-9.-]/gi, '-');
+  const slug = `${url.protocol.replace(':', '')}-${url.host}`.replaceAll(/[^a-z0-9.-]/gi, '-');
   const hash = createHash('sha256').update(origin).digest('hex').slice(0, 12);
   return resolve(baseDir, `${slug}-${hash}`);
 }
@@ -903,3 +881,35 @@ function abortReason(signal?: AbortSignal): Error {
 
 export { resolveUrls } from '../storage/db.js';
 export type { ConcurrencyConfig } from '../core/types.js';
+
+async function navigateForScrape(
+  page: Page,
+  config: AppConfig,
+  loadedUrl: LoadedUrl,
+  options: ScrapeOptions,
+  networkState: Awaited<ReturnType<typeof configurePageNetworking>>
+) {
+  let response;
+  try {
+    response = await page.goto(loadedUrl.url.url, {
+      waitUntil: config.browser.waitUntil,
+      timeout: config.browser.timeoutMs
+    });
+    throwIfAborted(options.signal);
+  } catch (error) {
+    throwBlockedRequestError(networkState.blockedError);
+    if (isPlaywrightTimeout(error)) {
+      throw new NavigationTimeoutError(
+        sanitizeTargetUrl(loadedUrl.url.url),
+        config.browser.timeoutMs
+      );
+    }
+    throw error;
+  }
+  const httpStatus = response?.status() ?? null;
+  throwBlockedRequestError(networkState.blockedError);
+  if (httpStatus !== null && httpStatus >= 400) {
+    throw new HttpError(sanitizeTargetUrl(loadedUrl.url.url), httpStatus);
+  }
+  return httpStatus;
+}

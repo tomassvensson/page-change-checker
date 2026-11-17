@@ -8,7 +8,7 @@ import type { AppConfig } from '../core/types.js';
 
 const MAX_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_LOGIN_TIMEOUT_MS = 60 * 60 * 1000;
-const ENV_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const ENV_REFERENCE = /^\$\{([A-Za-z_]\w*)\}$/;
 const FORBIDDEN_CUSTOM_HEADERS = new Set([
   'connection',
   'content-length',

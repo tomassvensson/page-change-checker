@@ -56,6 +56,10 @@ export function recordCliObservation(
     contentMode: config.contentMode,
     maxContentLength: config.maxContentLength
   };
+  let status = changed ? 'alert' : 'unchanged';
+  if (result.error || result.loginNeeded) status = 'error';
+  let authentication = result.loginChecks.length ? 'validated' : 'not-required';
+  if (result.loginNeeded) authentication = 'unverified';
   journal.record(
     {
       runId: id,
@@ -63,14 +67,10 @@ export function recordCliObservation(
       startedAt: at,
       endedAt: at,
       validated: !result.error && !result.loginNeeded,
-      status: result.error || result.loginNeeded ? 'error' : changed ? 'alert' : 'unchanged',
+      status,
       httpStatus: result.httpStatus,
       retries: 0,
-      authentication: result.loginNeeded
-        ? 'unverified'
-        : result.loginChecks.length
-          ? 'validated'
-          : 'not-required',
+      authentication,
       baselineVersion: 'cli-v2',
       evidenceId: id,
       storageResult: 'not-required',
