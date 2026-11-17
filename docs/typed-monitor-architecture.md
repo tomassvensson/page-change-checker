@@ -52,6 +52,11 @@ response with no evaluated conditions is rejected, not presented as quality proo
 Assign a project gate with explicit coverage and new-code reliability/security
 conditions using an administrator account. The local coverage minimum remains 81%
 for statements, branches, functions and lines; adding code does not relax it.
+The NAS script additionally requires at least 81% for Sonar's overall combined,
+line and branch coverage, and new-code combined coverage. This explicitly raises
+the server's default 80% new-code combined threshold without changing a gate shared
+by other projects. Missing metrics fail closed. New-code branch coverage is a
+separate diagnostic metric, not the configured overall-branch minimum.
 
 SonarCloud CI authentication and the NAS scan are separate integrations. A NAS
 analysis does not prove that the Cloud scanner or the GitHub workflow succeeded.

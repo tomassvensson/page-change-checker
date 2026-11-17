@@ -1,6 +1,10 @@
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+
 import { expect, it } from 'vitest';
 
 import type { MonitorTarget } from '../../src/monitor/config.js';
+import { windowsPowerShell } from '../../src/monitor/platform.js';
 import * as policy from '../../src/monitor/runtimePolicy.js';
 
 const target: MonitorTarget = {
@@ -9,6 +13,39 @@ const target: MonitorTarget = {
   url: 'https://example.com',
   rules: [{ id: 'r', kind: 'visibleTextSnapshot', selector: 'main', message: 'Changed' }]
 };
+it(
+  'enforces the NAS minimum independently of the server default',
+  { skip: process.platform !== 'win32', timeout: 15000 },
+  () => {
+    const script = resolve('scripts/sonar-nas.ps1').replaceAll("'", "''");
+    const command = String.raw`
+$tokens=$null;$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Invalid script syntax'}
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CoverageMinimum'},$true)
+Invoke-Expression $function.Extent.Text
+$metrics=@('coverage','line_coverage','branch_coverage','new_coverage') | ForEach-Object { @{metric=$_;value='81.0'} }
+Assert-CoverageMinimum $metrics
+$metrics[3]=@{metric='new_coverage';period=@{value='81.0'}}
+Assert-CoverageMinimum $metrics
+foreach($invalid in @('80.9','NaN','Infinity','invalid')) {
+  $metrics[0].value=$invalid;$rejected=$false
+  try{Assert-CoverageMinimum $metrics}catch{$rejected=$true}
+  if(-not $rejected){throw 'Invalid coverage accepted'}
+}
+$rejected=$false;try{Assert-CoverageMinimum @()}catch{$rejected=$true}
+if(-not $rejected){throw 'Missing metrics accepted'}
+Write-Output 'Coverage guard verified'
+`;
+    expect(
+      execFileSync(windowsPowerShell(), ['-NoProfile', '-NonInteractive', '-Command', command], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10000
+      })
+    ).toContain('Coverage guard verified');
+  }
+);
 it('shares bounded retry, HTTP classification and daily cadence policy', () => {
   expect(policy.httpRetrySettings(target)).toEqual({
     statuses: [],
