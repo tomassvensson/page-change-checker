@@ -5,7 +5,7 @@ import { diffLines, diffWordsWithSpace } from 'diff';
 
 import { dailyDiagnostics, dayKey } from './journal.js';
 import type { CheckRecord, MonitorJournal } from './journal.js';
-import { periodSummary, renderPeriodSummary } from './period.js';
+import { periodSummary, renderPeriodSummary, renderReportOverview } from './period.js';
 import type { PeriodTarget } from './period.js';
 
 export interface EvidenceResult {
@@ -177,26 +177,56 @@ export function projectMonitorMail(
           : `<pre>${escape(`${a.message}: ${a.observed}${a.rowChanges ? `\nRow changes:\n${JSON.stringify(a.rowChanges)}` : ''}`)}</pre>`
       )
       .join('');
-  const details = selected
-    .map((result) => {
-      const changed = isContentChange(result);
-      const imageHtml = [result.screenshotPath, result.diffScreenshotPath]
-        .map((path, index) => {
-          if (!path || !existsSync(path))
-            return '<p>Evidence image unavailable or expired (see local evidence metadata).</p>';
-          const cid = `evidence-${digest([result.evidenceId, path]).slice(0, 24)}@monitor.local`;
-          if (!attachments.some((a) => a.cid === cid))
-            attachments.push({
-              filename: `${result.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${(result.evidenceId ?? 'capture').slice(0, 12)}-${index ? 'changes' : 'original'}.png`,
-              cid,
-              content: readFileSync(path).toString('base64'),
-              contentType: 'image/png'
-            });
-          return `<p>${changed ? (index ? 'Marked changes (original is separate)' : 'Original screenshot') : 'Diagnostic screenshot — failed or incomplete check, not a page change'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${changed ? (index ? 'changes' : 'original') : 'diagnostic'}" style="max-width:100%"></a>`;
-        })
-        .join('');
-      return `<h2>${changed ? 'Confirmed page change' : 'Check diagnostic — no page change confirmed'}</h2><h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p>${conditionHtml(result)}${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><p>Captured page text</p><pre>${escape(result.text ?? '')}</pre>`;
-    })
+  const overview = renderReportOverview(summaries);
+  const sections = selected.map((result) => {
+    const changed = isContentChange(result);
+    const summary = summaries.find((r) => r.id === result.id);
+    const messages = [result.error, ...(result.warnings ?? [])].filter((v): v is string =>
+      Boolean(v)
+    );
+    const recovered =
+      !changed &&
+      Boolean(
+        summary?.lastSuccess &&
+        summary.lastSuccess > result.checkedAt &&
+        !messages.some((m) => summary.currentMessages.includes(m))
+      );
+    const diagnosticLabel = recovered
+      ? 'Earlier check problem — recovered; no action needed'
+      : 'Check diagnostic — no page change confirmed';
+    const imageHtml = [result.screenshotPath, result.diffScreenshotPath]
+      .map((path, index) => {
+        if (!path || !existsSync(path))
+          return '<p>Evidence image unavailable or expired (see local evidence metadata).</p>';
+        const cid = `evidence-${digest([result.evidenceId, path]).slice(0, 24)}@monitor.local`;
+        if (!attachments.some((a) => a.cid === cid))
+          attachments.push({
+            filename: `${result.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${(result.evidenceId ?? 'capture').slice(0, 12)}-${index ? 'changes' : 'original'}.png`,
+            cid,
+            content: readFileSync(path).toString('base64'),
+            contentType: 'image/png'
+          });
+        return `<p>${changed ? (index ? 'Marked changes (original is separate)' : 'Original screenshot') : recovered ? 'Historical diagnostic screenshot — recovered, no action needed' : 'Diagnostic screenshot — failed or incomplete check, not a page change'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${changed ? (index ? 'changes' : 'original') : 'diagnostic'}" style="max-width:100%"></a>`;
+      })
+      .join('');
+    const action = changed
+      ? ''
+      : recovered
+        ? 'No action needed for this earlier problem.'
+        : (summary?.action ?? 'Automatic retries continue; recovery is not yet confirmed.');
+    return {
+      changed,
+      text: `${changed ? 'Confirmed page change' : diagnosticLabel}\n${result.title ?? result.label}\n${result.url}\n${action}\n${conditionText(result)}\n${result.error ?? result.warnings?.join('; ') ?? ''}\nCaptured page text:\n${result.text ?? ''}`,
+      html: `<h2>${changed ? 'Confirmed page change' : diagnosticLabel}</h2><h3>${escape(result.title || result.label)}</h3><p><a href="${escape(result.url)}">${escape(result.label)}</a> — ${escape(result.status)}</p><p>${escape(action)}</p>${conditionHtml(result)}${imageHtml}<p>${escape(result.error ?? result.warnings?.join('; ') ?? '')}</p><p>Captured page text</p><pre>${escape(result.text ?? '')}</pre>`
+    };
+  });
+  const details = sections
+    .filter((s) => s.changed)
+    .map((s) => s.html)
+    .join('');
+  const diagnosticDetails = sections
+    .filter((s) => !s.changed)
+    .map((s) => s.html)
     .join('');
   const metrics = journal.queueHealth(options.now);
   const storage = journal.storageRecords(options.since, options.now);
@@ -212,14 +242,16 @@ export function projectMonitorMail(
   const coverageText = summaries
     .map(
       (r) =>
-        `${r.title}\n${r.url}\n${r.outcome}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered)' : ''}`).join('\n')}`
+        `${r.title}\n${r.url}\nPeriod: ${r.outcome}; latest check: ${r.currentStatus}; action: ${r.action}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered; no action needed)' : ''}`).join('\n')}`
     )
     .join('\n\n');
-  const detailsText = selected
-    .map(
-      (r) =>
-        `${isContentChange(r) ? 'Confirmed page change' : 'Check diagnostic — no page change confirmed'}\n${r.title ?? r.label}\n${r.url}\n${conditionText(r)}\n${r.error ?? r.warnings?.join('; ') ?? ''}\nCaptured page text:\n${r.text ?? ''}`
-    )
+  const detailsText = sections
+    .filter((s) => s.changed)
+    .map((s) => s.text)
+    .join('\n\n');
+  const diagnosticText = sections
+    .filter((s) => !s.changed)
+    .map((s) => s.text)
     .join('\n\n');
   journal.projectDestinations(
     options.recipients.map((recipient, index) => {
@@ -230,7 +262,7 @@ export function projectMonitorMail(
           new Date(Date.parse(options.now) - 36 * 3600000).toISOString(),
           options.now
         );
-      const html = `<html><body>${details}${fullCoverage ? coverageHtml : ''}</body></html>`;
+      const html = `<html><body>${overview.html}${details}${fullCoverage ? coverageHtml : ''}${diagnosticDetails}</body></html>`;
       let portableHtml = html;
       for (const image of attachments)
         portableHtml = portableHtml.replaceAll(
@@ -244,7 +276,9 @@ export function projectMonitorMail(
           subject: `${options.subjectPrefix} — ${options.dailyDate ?? 'confirmed change'}`,
           html,
           portableHtml,
-          text: [detailsText, fullCoverage ? coverageText : ''].filter(Boolean).join('\n\n'),
+          text: [overview.text, detailsText, fullCoverage ? coverageText : '', diagnosticText]
+            .filter(Boolean)
+            .join('\n\n'),
           recipient,
           attachments,
           dailyDate: options.dailyDate ?? null,
