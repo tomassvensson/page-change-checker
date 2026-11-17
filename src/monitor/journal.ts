@@ -54,6 +54,28 @@ export interface MailRecord {
   owner?: string;
 }
 
+interface BaselineRow {
+  target: string;
+  rule_id: string;
+  version: string;
+  definition: string;
+  observation: string;
+  at: string;
+  evidence: string;
+}
+
+function decodeBaseline(row: BaselineRow): BaselineRevision {
+  return {
+    target: row.target,
+    ruleId: row.rule_id,
+    version: row.version,
+    definition: JSON.parse(row.definition) as unknown,
+    observation: JSON.parse(row.observation) as unknown,
+    at: row.at,
+    evidenceId: row.evidence
+  };
+}
+
 /** Local-only operational ledger. Checks and delivery attempts are append-only;
  * outbox/spool are durable projections. Never put secrets in payloads. */
 export class MonitorJournal {
@@ -216,46 +238,16 @@ export class MonitorJournal {
           `SELECT b.* FROM monitor_baselines b WHERE target=? AND id IN
       (SELECT max(id) FROM monitor_baselines WHERE target=? GROUP BY rule_id)`
         )
-        .all(target, target) as {
-        target: string;
-        rule_id: string;
-        version: string;
-        definition: string;
-        observation: string;
-        at: string;
-        evidence: string;
-      }[]
-    ).map((row) => ({
-      target: row.target,
-      ruleId: row.rule_id,
-      version: row.version,
-      definition: JSON.parse(row.definition) as unknown,
-      observation: JSON.parse(row.observation) as unknown,
-      at: row.at,
-      evidenceId: row.evidence
-    }));
+        .all(target, target) as BaselineRow[]
+    ).map(decodeBaseline);
   }
 
   baselineHistory(target: string): BaselineRevision[] {
     return (
-      this.db.prepare('SELECT * FROM monitor_baselines WHERE target=? ORDER BY id').all(target) as {
-        target: string;
-        rule_id: string;
-        version: string;
-        definition: string;
-        observation: string;
-        at: string;
-        evidence: string;
-      }[]
-    ).map((row) => ({
-      target: row.target,
-      ruleId: row.rule_id,
-      version: row.version,
-      definition: JSON.parse(row.definition) as unknown,
-      observation: JSON.parse(row.observation) as unknown,
-      at: row.at,
-      evidenceId: row.evidence
-    }));
+      this.db
+        .prepare('SELECT * FROM monitor_baselines WHERE target=? ORDER BY id')
+        .all(target) as BaselineRow[]
+    ).map(decodeBaseline);
   }
 
   registerTargets(
