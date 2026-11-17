@@ -8,6 +8,28 @@ import type { CheckRecord, MonitorJournal } from './journal.js';
 import { periodSummary, renderPeriodSummary, renderReportOverview } from './period.js';
 import type { PeriodTarget } from './period.js';
 
+function imagePresentation(changed: boolean, recovered: boolean, index: number) {
+  if (changed)
+    return {
+      label: index ? 'Marked changes (original is separate)' : 'Original screenshot',
+      kind: index ? 'changes' : 'original'
+    };
+  if (recovered)
+    return {
+      label: 'Historical diagnostic screenshot — recovered, no action needed',
+      kind: 'diagnostic'
+    };
+  return {
+    label: 'Diagnostic screenshot — failed or incomplete check, not a page change',
+    kind: 'diagnostic'
+  };
+}
+function diagnosticAction(changed: boolean, recovered: boolean, action: string | undefined) {
+  if (changed) return '';
+  if (recovered) return 'No action needed for this earlier problem.';
+  return action ?? 'Automatic retries continue; recovery is not yet confirmed.';
+}
+
 export interface EvidenceResult {
   id: string;
   label: string;
@@ -196,7 +218,8 @@ export function projectMonitorMail(
       : 'Check diagnostic — no page change confirmed';
     const imageHtml = [result.screenshotPath, result.diffScreenshotPath]
       .map((path, index) => {
-        if (!path || !existsSync(path))
+        if (!path) return '';
+        if (!existsSync(path))
           return '<p>Evidence image unavailable or expired (see local evidence metadata).</p>';
         const cid = `evidence-${digest([result.evidenceId, path]).slice(0, 24)}@monitor.local`;
         if (!attachments.some((a) => a.cid === cid))
@@ -206,14 +229,11 @@ export function projectMonitorMail(
             content: readFileSync(path).toString('base64'),
             contentType: 'image/png'
           });
-        return `<p>${changed ? (index ? 'Marked changes (original is separate)' : 'Original screenshot') : recovered ? 'Historical diagnostic screenshot — recovered, no action needed' : 'Diagnostic screenshot — failed or incomplete check, not a page change'} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${changed ? (index ? 'changes' : 'original') : 'diagnostic'}" style="max-width:100%"></a>`;
+        const presentation = imagePresentation(changed, recovered, index);
+        return `<p>${presentation.label} — captured ${escape(result.checkedAt)}, evidence ${escape(result.evidenceId ?? 'legacy')}</p><a href="cid:${cid}"><img src="cid:${cid}" alt="${escape(result.title ?? result.label)} — ${presentation.kind}" style="max-width:100%"></a>`;
       })
       .join('');
-    const action = changed
-      ? ''
-      : recovered
-        ? 'No action needed for this earlier problem.'
-        : (summary?.action ?? 'Automatic retries continue; recovery is not yet confirmed.');
+    const action = diagnosticAction(changed, recovered, summary?.action);
     return {
       changed,
       text: `${changed ? 'Confirmed page change' : diagnosticLabel}\n${result.title ?? result.label}\n${result.url}\n${action}\n${conditionText(result)}\n${result.error ?? result.warnings?.join('; ') ?? ''}\nCaptured page text:\n${result.text ?? ''}`,
@@ -235,15 +255,27 @@ export function projectMonitorMail(
       storage.filter((s) => ['failed', 'rejected'].includes(s.outcome)).map((s) => [s.sample, s])
     ).values()
   ];
+  const storageRows = failures
+    .map((s) => {
+      const recovery = storage.some(
+        (later) => later.sample === s.sample && later.at > s.at && later.outcome === 'committed'
+      )
+        ? 'Recovered'
+        : 'Pending / needs investigation';
+      return `<tr><td>${escape(s.sample)}</td><td>${escape(s.at)}</td><td>${escape(s.detail)}</td><td>${recovery}</td></tr>`;
+    })
+    .join('');
   const storageHtml = failures.length
-    ? `<h2>Retained history-storage diagnostics</h2><table border="1"><tr><th>Sample</th><th>Time</th><th>Outcome</th><th>Recovery</th></tr>${failures.map((s) => `<tr><td>${escape(s.sample)}</td><td>${escape(s.at)}</td><td>${escape(s.detail)}</td><td>${storage.some((later) => later.sample === s.sample && later.at > s.at && later.outcome === 'committed') ? 'Recovered' : 'Pending / needs investigation'}</td></tr>`).join('')}</table>`
+    ? `<h2>Retained history-storage diagnostics</h2><table border="1"><tr><th>Sample</th><th>Time</th><th>Outcome</th><th>Recovery</th></tr>${storageRows}</table>`
     : '';
   const coverageHtml = `${renderPeriodSummary(summaries, options.now)}<p>Unsent messages: ${metrics.pending}; quarantined: ${metrics.quarantined}; history backlog: ${metrics.historyBacklog}</p>${storageHtml}`;
   const coverageText = summaries
-    .map(
-      (r) =>
-        `${r.title}\n${r.url}\nPeriod: ${r.outcome}; latest check: ${r.currentStatus}; action: ${r.action}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${r.diagnostics.map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered; no action needed)' : ''}`).join('\n')}`
-    )
+    .map((r) => {
+      const diagnostics = r.diagnostics
+        .map((d) => `${d.at}: ${d.message}${d.recovered ? ' (recovered; no action needed)' : ''}`)
+        .join('\n');
+      return `${r.title}\n${r.url}\nPeriod: ${r.outcome}; latest check: ${r.currentStatus}; action: ${r.action}; checks ${r.checks}, successful ${r.successful}; last validated ${r.lastSuccess ?? 'never'}\n${diagnostics}`;
+    })
     .join('\n\n');
   const detailsText = sections
     .filter((s) => s.changed)

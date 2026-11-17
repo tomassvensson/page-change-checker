@@ -16,6 +16,58 @@ interface Result {
   notes?: string[];
   lastInterestingChangeAt?: string | null;
 }
+function issueMessages(check: CheckRecord): string[] {
+  const payload = check.payload as Result;
+  const messages = [payload?.error, ...(payload?.warnings ?? [])].filter((v): v is string =>
+    Boolean(v)
+  );
+  if (messages.length) return [...new Set(messages)];
+  if (check.validated) return [];
+  return ['Validation failed'];
+}
+function periodOutcome(changed: boolean, latest: CheckRecord | undefined) {
+  if (changed) return 'confirmed changed';
+  if (!latest) return 'not due / not checked';
+  if (latest.validated) return 'validated unchanged';
+  if (latest.status === 'error') return 'failed';
+  return 'inconclusive';
+}
+function latestStatus(last: CheckRecord | undefined, stale: boolean, messages: string[]) {
+  if (!last) return 'not checked';
+  if (stale) return 'stale';
+  if (last.validated) return messages.length ? 'validated with warnings' : 'healthy';
+  return last.status === 'error' ? 'failed' : 'incomplete';
+}
+function currentHealth(target: PeriodTarget, all: CheckRecord[], until: string) {
+  const last = all.at(-1);
+  const currentMessages = last ? issueMessages(last) : [];
+  const stale = Boolean(
+    last &&
+    Date.parse(until) - Date.parse(last.endedAt) >
+      Math.max(86400000, (target.intervalMs ?? 1800000) * 3)
+  );
+  const currentStatus = latestStatus(last, stale, currentMessages);
+  const consecutiveFailures = [...all]
+    .reverse()
+    .findIndex((c) => c.validated && issueMessages(c).length === 0);
+  const needsAction =
+    currentStatus !== 'healthy' &&
+    currentStatus !== 'not checked' &&
+    (stale || (consecutiveFailures === -1 ? all.length : consecutiveFailures) >= 3);
+  let action = 'Automatic retry will continue; no immediate manual action needed';
+  if (currentStatus === 'healthy') action = 'No action needed';
+  else if (needsAction) action = 'Investigate recurring failure; review latest error below';
+  return { currentStatus, currentMessages, needsAction, action };
+}
+function groupDiagnostics(issues: CheckRecord[]) {
+  const grouped = new Map<string, { check: CheckRecord; message: string; count: number }>();
+  for (const check of issues)
+    for (const message of issueMessages(check)) {
+      const key = (check.outageDay ?? '') + ':' + message;
+      grouped.set(key, { check, message, count: (grouped.get(key)?.count ?? 0) + 1 });
+    }
+  return grouped;
+}
 export function periodSummary(
   targets: PeriodTarget[],
   checks: CheckRecord[],
@@ -44,34 +96,12 @@ export function periodSummary(
       events.some(
         (e) => e.target === target.id && e.kind === 'content' && e.at >= since && e.at < until
       );
-    const state = changed
-      ? 'confirmed changed'
-      : !latest
-        ? 'not due / not checked'
-        : latest.validated
-          ? 'validated unchanged'
-          : latest.status === 'error'
-            ? 'failed'
-            : 'inconclusive';
+    const state = periodOutcome(changed, latest);
     const issues = diagnostics.filter(
       (c) =>
         c.target === target.id && (c.outageDay ? c.outageDay >= dayKey(since) : c.endedAt >= since)
     );
-    const grouped = new Map<string, { check: CheckRecord; message: string; count: number }>();
-    const issueMessages = (c: CheckRecord) => {
-      const payload = c.payload as Result;
-      const messages = [payload?.error, ...(payload?.warnings ?? [])].filter((v): v is string =>
-        Boolean(v)
-      );
-      return [...new Set(messages.length ? messages : c.validated ? [] : ['Validation failed'])];
-    };
-    for (const c of issues) {
-      for (const message of issueMessages(c)) {
-        const key = (c.outageDay ?? '') + ':' + message,
-          old = grouped.get(key);
-        grouped.set(key, { check: c, message, count: (old?.count ?? 0) + 1 });
-      }
-    }
+    const grouped = groupDiagnostics(issues);
     const recovered5xx = rows
       .filter((c) => c.validated)
       .flatMap((c) => c.attempts ?? [])
@@ -87,30 +117,7 @@ export function periodSummary(
         .filter((v): v is string => Boolean(v))
         .sort((a, b) => a.localeCompare(b))
         .at(-1) ?? null;
-    const currentMessages = last ? issueMessages(last) : [];
-    const stale = Boolean(
-      last &&
-      Date.parse(until) - Date.parse(last.endedAt) >
-        Math.max(86400000, (target.intervalMs ?? 1800000) * 3)
-    );
-    const currentStatus = !last
-      ? 'not checked'
-      : stale
-        ? 'stale'
-        : !last.validated
-          ? last.status === 'error'
-            ? 'failed'
-            : 'incomplete'
-          : currentMessages.length
-            ? 'validated with warnings'
-            : 'healthy';
-    const consecutiveFailures = [...all]
-      .reverse()
-      .findIndex((c) => c.validated && issueMessages(c).length === 0);
-    const needsAction =
-      currentStatus !== 'healthy' &&
-      currentStatus !== 'not checked' &&
-      (stale || (consecutiveFailures === -1 ? all.length : consecutiveFailures) >= 3);
+    const health = currentHealth(target, all, until);
     return {
       ...target,
       title:
@@ -123,16 +130,8 @@ export function periodSummary(
         target.title ||
         '(title unavailable)',
       outcome: state,
-      currentStatus,
+      ...health,
       latestValidated: last?.validated ?? null,
-      currentMessages,
-      needsAction,
-      action:
-        currentStatus === 'healthy'
-          ? 'No action needed'
-          : needsAction
-            ? 'Investigate recurring failure; review latest error below'
-            : 'Automatic retry will continue; no immediate manual action needed',
       checks: rows.length,
       successful: rows.filter((c) => c.validated).length,
       lastAttempt: last?.endedAt ?? null,
@@ -176,9 +175,12 @@ export function renderReportOverview(rows: PeriodRow[]) {
   const action = rows.filter((r) => r.needsAction).length;
   const attempts = rows.reduce((n, r) => n + r.checks, 0);
   const successes = rows.reduce((n, r) => n + r.successful, 0);
+  const actionMessage = action
+    ? `${action} recurring problem(s) need investigation.`
+    : 'Automatic retries continue; no immediate manual action is required.';
   const message =
     failed || warnings || pending
-      ? `${passed} latest checks healthy; ${failed} failed/incomplete; ${warnings} with warnings; ${pending} not yet checked. ${action ? `${action} recurring problem(s) need investigation.` : 'Automatic retries continue; no immediate manual action is required.'}`
+      ? `${passed} latest checks healthy; ${failed} failed/incomplete; ${warnings} with warnings; ${pending} not yet checked. ${actionMessage}`
       : `All ${passed} targets passed their latest check. No action is needed for recovered diagnostics.`;
   const text = `Current monitor status: ${message}\nReporting period: ${successes}/${attempts} checks validated. Earlier failures below may already be recovered; they do not describe the latest check.`;
   return {

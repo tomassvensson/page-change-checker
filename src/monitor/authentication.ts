@@ -13,6 +13,27 @@ interface LoginOptions {
   failure: (url: string, text: string) => string | null;
 }
 const sessions = new WeakMap<BrowserContext, { failure: string | null }>();
+export async function waitForContextClose(
+  context: { once(event: 'close', listener: () => void): unknown; close(): Promise<void> },
+  timeoutMs: number
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      new Promise<void>((resolve) => context.once('close', resolve)),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          void context
+            .close()
+            .catch(() => undefined)
+            .finally(resolve);
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 /** A shared site login is attempted once per browser context. Only the two
  * configured credential fields are touched; credential entry is origin-bound. */
 export async function ensureCredentialsLogin(page: Page, options: LoginOptions) {

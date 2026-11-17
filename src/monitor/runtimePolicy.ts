@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import type { MonitorTarget } from './config.js';
-import type { MonitorResult, MonitorState } from './runtimeTypes.js';
+import { ruleVersion } from './journal.js';
+import type { MonitorResult, MonitorState, MonitorEvent } from './runtimeTypes.js';
+import { authenticationFailure as websiteAuthenticationFailure } from './sites.js';
+
 const defaultRetryDelayMs = 30000;
 export function httpRetrySettings(target: MonitorTarget) {
   const configured = target.httpRetry;
@@ -62,11 +66,18 @@ export function berlinHour(date: Date) {
 }
 
 export function renderTable(headers: string[], rows: string[][], emptyMessage: string) {
+  const renderedRows = rows
+    .map((row) => {
+      const cells = row.map((cell) => `<td>${cell}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('\n');
+  const renderedHeaders = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('');
   const body =
     rows.length > 0
-      ? rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('\n')
+      ? renderedRows
       : `<tr><td colspan="${headers.length.toString()}" class="muted">${escapeHtml(emptyMessage)}</td></tr>`;
-  return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+  return `<table><thead><tr>${renderedHeaders}</tr></thead>
   <tbody>${body}</tbody></table>`;
 }
 
@@ -185,7 +196,7 @@ export function normalizeWhitespace(value: unknown) {
     typeof value === 'bigint'
       ? String(value)
       : '';
-  return primitive.replace(/\s+/gu, ' ').trim();
+  return primitive.replaceAll(/\s+/gu, ' ').trim();
 }
 
 export function escapeHtml(value: unknown) {
@@ -240,4 +251,88 @@ export function firstLine(value: unknown) {
 
 export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function finishResult(
+  result: MonitorResult,
+  target: MonitorTarget,
+  previousState: MonitorState,
+  nextState: MonitorState,
+  newEvents: MonitorEvent[]
+) {
+  const previous = previousState.targets?.[target.id];
+  result.title ||= previous?.title ?? '';
+  result.fingerprint = fingerprintFor(result);
+  const interesting = result.confirmedChange
+    ? (result.metricReadAt ?? result.checkedAt)
+    : (result.progressInterestingAt ?? previous?.lastInterestingChangeAt ?? null);
+  result.lastInterestingChangeAt = interesting;
+  if (result.confirmedChange)
+    newEvents.push({
+      label: target.label,
+      title: result.title,
+      status: 'alert',
+      summary: summarizeResult(result)
+    });
+  nextState.targets[target.id] = {
+    ...previous,
+    status: result.status,
+    fingerprint: result.fingerprint,
+    title: result.title || previous?.title || '',
+    observations: { ...previous?.observations, ...result.observations },
+    lastScreenshot: result.screenshotPath ?? previous?.lastScreenshot ?? null,
+    lastDiffScreenshot: result.diffScreenshotPath ?? null,
+    lastInterestingChangeAt: interesting,
+    lastAttemptAt: result.checkedAt,
+    checkedAt: result.checkedAt,
+    lastSuccessfulValidatedCheckAt: result.observationsValidated
+      ? result.checkedAt
+      : (previous?.lastSuccessfulValidatedCheckAt ?? null),
+    lastProgressObservedAt:
+      result.metricValues && result.pageValidated
+        ? result.metricReadAt
+        : (previous?.lastProgressObservedAt ?? null),
+    rulesVersion: ruleVersion(target.rules)
+  };
+}
+
+export function authenticationFailureReason(target: MonitorTarget, finalUrl: string, text: string) {
+  return websiteAuthenticationFailure(target, finalUrl, text);
+}
+
+export function printConsoleTables(results: MonitorResult[], reportPath: string) {
+  const unchanged = results
+    .filter((result) => result.status === 'unchanged')
+    .map((result) => `- unchanged | ${result.title || '(title unavailable)'} | ${result.url}`);
+  const diagnostics = results
+    .filter((result) => result.status !== 'unchanged')
+    .map(
+      (result) =>
+        `- ${result.status} | ${result.title || '(title unavailable)'} | ${result.url} | ${summarizeResult(result)}`
+    );
+
+  console.log('\nUnchanged URLs');
+  console.log(unchanged.length > 0 ? unchanged.join('\n') : '(none)');
+  console.log('\nAlerts, errors, and warnings');
+  console.log(diagnostics.length > 0 ? diagnostics.join('\n') : '(none)');
+  console.log(`\nFull report: ${reportPath}`);
+}
+
+export function screenshotLink(path: string | null | undefined, label: string = 'Open screenshot') {
+  return path ? `<a href="${escapeHtml(pathToFileURL(path).href)}">${escapeHtml(label)}</a>` : null;
+}
+export function screenshotLinks(result: MonitorResult) {
+  const links = [
+    screenshotLink(result.screenshotPath, 'Open screenshot'),
+    screenshotLink(result.diffScreenshotPath, 'Open annotated change map')
+  ].filter(Boolean);
+  return links.length > 0 ? links.join('<br>') : '—';
+}
+
+export function pageTitleCell(result: MonitorResult) {
+  return escapeHtml(result.title || '(title unavailable)');
+}
+
+export function link(url: string, label: string) {
+  return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }

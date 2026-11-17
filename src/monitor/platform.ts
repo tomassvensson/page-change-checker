@@ -9,7 +9,7 @@ export function windowsPowerShell(systemRoot: string | undefined = process.env.S
 
 /** Bounded, linear-time slug conversion (including hostile all-punctuation input). */
 export function safePathPart(value: string): string {
-  const normalized = value.normalize('NFKD').replace(/[^\w.-]+/gu, '-');
+  const normalized = value.normalize('NFKD').replaceAll(/[^\w.-]+/gu, '-');
   let start = 0,
     end = normalized.length;
   while (start < end && normalized[start] === '-') start++;

@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { acquireFileLock } from '../core/fileLock.js';
 
 import { watchRecordActivity } from './activity.js';
+import { waitForContextClose } from './authentication.js';
 import { runRuleCheck, annotateChanges } from './capture.js';
 import type { MonitorTarget } from './config.js';
 import { monitorSettingsSchema } from './config.js';
@@ -48,6 +49,12 @@ import { replayRules } from './replay.js';
 import { ruleSchema, extractStatistic as sharedExtractStatistic } from './rules.js';
 import type { Observation } from './rules.js';
 import {
+  finishResult,
+  authenticationFailureReason,
+  printConsoleTables,
+  screenshotLinks,
+  pageTitleCell,
+  link,
   httpRetrySettings,
   httpStatusFailureMessage,
   isFiveXxStatus,
@@ -55,7 +62,6 @@ import {
   berlinDateKey,
   berlinHour,
   renderTable,
-  summarizeResult,
   fingerprintFor,
   errorResult,
   isTargetDue,
@@ -85,10 +91,7 @@ import type {
   EmailDelivery,
   ReportContext
 } from './runtimeTypes.js';
-import {
-  createWebsiteAdapter,
-  authenticationFailure as websiteAuthenticationFailure
-} from './sites.js';
+import { createWebsiteAdapter } from './sites.js';
 
 export async function runLocalMonitor(root: string, args: string[] = process.argv.slice(2)) {
   const monitorDir = resolve(root);
@@ -503,19 +506,7 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       `A visible Metric browser is open. Log in, confirm the profile is visible, then close the browser. It will close automatically after ${timeoutMinutes.toString()} minutes.`
     );
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      new Promise<void>((resolveClose) => context.once('close', () => resolveClose())),
-      new Promise<void>((resolveTimeout) => {
-        timeout = setTimeout(() => {
-          void context
-            .close()
-            .catch(() => undefined)
-            .finally(resolveTimeout);
-        }, timeoutMinutes * 60_000);
-      })
-    ]);
-    clearTimeout(timeout);
+    await waitForContextClose(context, timeoutMinutes * 60000);
     console.log('Metric browser profile bootstrap finished.');
   }
 
@@ -619,7 +610,8 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         failure: (target, error) =>
           errorResult(target, checkedAt, 'Browser/inspection failed: ' + errorMessage(error)),
         persist: (target, result) => {
-          createStageRecorder((result.stages ??= []))('save');
+          result.stages ??= [];
+          createStageRecorder(result.stages)('save');
           recordMetricProgressHistory(target, result);
           finishResult(result, target, previousState, nextState, newEvents);
           recordCheck(result, target, runId);
@@ -677,7 +669,10 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     );
 
     let reportPath = writeReport(results, checkedAt, null, { skippedTargets });
-    for (const result of results) createStageRecorder((result.stages ??= []))('notify');
+    for (const result of results) {
+      result.stages ??= [];
+      createStageRecorder(result.stages)('notify');
+    }
     const emailOutcome = await maybeSendEmailReport(
       results,
       reportPath,
@@ -878,7 +873,8 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         'Encrypted login credential is unavailable.'
       )
     );
-    const observeStage = createStageRecorder((result.stages ??= []));
+    result.stages ??= [];
+    const observeStage = createStageRecorder(result.stages);
     const navigate = async () => {
       const outcome = await navigateTargetWithHttpRetries(
         page,
@@ -1038,49 +1034,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     result.retries = result.attempts.filter((a) => a.status === null || a.status >= 400).length;
     result.fingerprint = fingerprintFor(result);
     return result;
-  }
-
-  function finishResult(
-    result: MonitorResult,
-    target: MonitorTarget,
-    previousState: MonitorState,
-    nextState: MonitorState,
-    newEvents: MonitorEvent[]
-  ) {
-    const previous = previousState.targets?.[target.id];
-    result.title ||= previous?.title ?? '';
-    result.fingerprint = fingerprintFor(result);
-    const interesting = result.confirmedChange
-      ? (result.metricReadAt ?? result.checkedAt)
-      : (result.progressInterestingAt ?? previous?.lastInterestingChangeAt ?? null);
-    result.lastInterestingChangeAt = interesting;
-    if (result.confirmedChange)
-      newEvents.push({
-        label: target.label,
-        title: result.title,
-        status: 'alert',
-        summary: summarizeResult(result)
-      });
-    nextState.targets[target.id] = {
-      ...previous,
-      status: result.status,
-      fingerprint: result.fingerprint,
-      title: result.title || previous?.title || '',
-      observations: { ...previous?.observations, ...result.observations },
-      lastScreenshot: result.screenshotPath ?? previous?.lastScreenshot ?? null,
-      lastDiffScreenshot: result.diffScreenshotPath ?? null,
-      lastInterestingChangeAt: interesting,
-      lastAttemptAt: result.checkedAt,
-      checkedAt: result.checkedAt,
-      lastSuccessfulValidatedCheckAt: result.observationsValidated
-        ? result.checkedAt
-        : (previous?.lastSuccessfulValidatedCheckAt ?? null),
-      lastProgressObservedAt:
-        result.metricValues && result.pageValidated
-          ? result.metricReadAt
-          : (previous?.lastProgressObservedAt ?? null),
-      rulesVersion: ruleVersion(target.rules)
-    };
   }
 
   function isActiveMetricHistoryTarget(target: MonitorTarget | undefined) {
@@ -1357,10 +1310,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
       }
     }
     return null;
-  }
-
-  function authenticationFailureReason(target: MonitorTarget, finalUrl: string, text: string) {
-    return websiteAuthenticationFailure(target, finalUrl, text);
   }
 
   async function waitForRequiredElement(
@@ -1842,24 +1791,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
     return (normalizeWhitespace(email.senderName) || monitorHostname).slice(0, 100);
   }
 
-  function printConsoleTables(results: MonitorResult[], reportPath: string) {
-    const unchanged = results
-      .filter((result) => result.status === 'unchanged')
-      .map((result) => `- unchanged | ${result.title || '(title unavailable)'} | ${result.url}`);
-    const diagnostics = results
-      .filter((result) => result.status !== 'unchanged')
-      .map(
-        (result) =>
-          `- ${result.status} | ${result.title || '(title unavailable)'} | ${result.url} | ${summarizeResult(result)}`
-      );
-
-    console.log('\nUnchanged URLs');
-    console.log(unchanged.length > 0 ? unchanged.join('\n') : '(none)');
-    console.log('\nAlerts, errors, and warnings');
-    console.log(diagnostics.length > 0 ? diagnostics.join('\n') : '(none)');
-    console.log(`\nFull report: ${reportPath}`);
-  }
-
   function profileDirectory(origin: string, target?: MonitorTarget) {
     if (target?.profileDirectoryName) {
       return join(profilesDir, safePathPart(target.profileDirectoryName));
@@ -1890,28 +1821,6 @@ export async function runLocalMonitor(root: string, args: string[] = process.arg
         if (statSync(filePath).mtimeMs < cutoff) rmSync(filePath, { force: true });
       }
     }
-  }
-
-  function screenshotLink(path: string | null | undefined, label: string = 'Open screenshot') {
-    return path
-      ? `<a href="${escapeHtml(pathToFileURL(path).href)}">${escapeHtml(label)}</a>`
-      : null;
-  }
-
-  function screenshotLinks(result: MonitorResult) {
-    const links = [
-      screenshotLink(result.screenshotPath, 'Open screenshot'),
-      screenshotLink(result.diffScreenshotPath, 'Open annotated change map')
-    ].filter(Boolean);
-    return links.length > 0 ? links.join('<br>') : '—';
-  }
-
-  function pageTitleCell(result: MonitorResult) {
-    return escapeHtml(result.title || '(title unavailable)');
-  }
-
-  function link(url: string, label: string) {
-    return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
   }
 
   function readJson(path: string, fallback: unknown = undefined) {

@@ -86,6 +86,7 @@ it.each([false, true])(
         : 'Check diagnostic — no page change confirmed';
       expect(mail.html).toContain(heading);
       expect(mail.html).not.toContain('Original screenshot');
+      expect(mail.html).not.toContain('Evidence image unavailable or expired');
       expect(mail.html).not.toContain('Confirmed page change');
       expect(mail.text).toContain(heading);
       if (recovered) {

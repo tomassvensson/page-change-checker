@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { expect, it } from 'vitest';
 
+import { waitForContextClose } from '../../src/monitor/authentication.js';
 import { monitorSettingsSchema } from '../../src/monitor/config.js';
 import { MonitorJournal } from '../../src/monitor/journal.js';
 import type { CheckRecord } from '../../src/monitor/journal.js';
@@ -16,6 +17,30 @@ import { parseQueuedMail } from '../../src/monitor/runtimeTypes.js';
 import { authenticationFailure, createWebsiteAdapter } from '../../src/monitor/sites.js';
 
 const target = { id: 'example', label: 'Example', url: 'https://example.com/account' };
+it('clears the manual-login timer on close and bounds a session that never closes', async () => {
+  let finish: () => void = () => undefined;
+  let closed = 0;
+  const context = {
+    once: (_event: 'close', listener: () => void) => {
+      finish = listener;
+    },
+    close: () => {
+      closed++;
+      finish();
+      return Promise.resolve();
+    }
+  };
+  const pending = waitForContextClose(context, 1000);
+  finish();
+  await pending;
+  expect(closed).toBe(0);
+  await waitForContextClose(context, 1);
+  expect(closed).toBe(1);
+  await waitForContextClose(
+    { ...context, close: () => Promise.reject(new Error('Already gone')) },
+    1
+  );
+});
 it('uses bounded path slugs and an absolute Windows executable rather than PATH lookup', () => {
   expect(safePathPart('  Example / account  ')).toBe('Example-account');
   expect(() => safePathPart('!!!')).toThrow('Unsafe');

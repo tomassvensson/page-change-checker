@@ -64,13 +64,7 @@ export function createWebsiteAdapter(
   credentials: () => { user: string; password: string }
 ): WebsiteAdapter {
   const host = new URL(target.url).hostname;
-  const name: WebsiteAdapter['name'] = host.includes('metric.com')
-    ? 'metric'
-    : host.includes('provider-online.de')
-      ? 'provider'
-      : host.includes('provider.')
-        ? 'provider'
-        : 'generic';
+  const name = websiteName(host);
   return {
     name,
     requiredStatistics:
@@ -96,4 +90,10 @@ export function createWebsiteAdapter(
       });
     }
   };
+}
+function websiteName(host: string): WebsiteAdapter['name'] {
+  if (host.includes('metric.com')) return 'metric';
+  if (host.includes('provider-online.de')) return 'provider';
+  if (host.includes('provider.')) return 'provider';
+  return 'generic';
 }
