@@ -22,6 +22,7 @@ const allowedHosts = new Set([
   'registry.npmjs.org',
   'schema.org',
   'sonarcloud.io',
+  'api.sonarcloud.io',
   't.me',
   'tidelift.com',
   'www.patreon.com',
@@ -128,9 +129,11 @@ export function checkPublication(staged = false, root = process.cwd()) {
     );
   console.log(`Publication check passed (${files.length} files).`);
 }
-/** Scan every reachable object, not only the final tree. Values are never logged. */
+/** Scan publishable histories and outgoing commits. Private tool refs are opt-in. */
 export function checkPublicationHistory(
-  root = process.env.PCC_PUBLICATION_HISTORY_ROOT ?? process.cwd()
+  root = process.env.PCC_PUBLICATION_HISTORY_ROOT ?? process.cwd(),
+  allRefs = false,
+  commits: string[] = []
 ) {
   const policy = loadPublicationPolicy(
     process.env.PCC_PUBLICATION_POLICY ?? resolve('data/local-monitor/publication-policy.json')
@@ -147,10 +150,12 @@ export function checkPublicationHistory(
       throw new Error('Unable to inspect Git history; command output was withheld');
     }
   };
-  const refs = git(['for-each-ref', '--format=%(refname)']).toString();
+  const scopes = allRefs ? [] : ['refs/heads/', 'refs/tags/', 'refs/remotes/'];
+  const refs = git(['for-each-ref', '--format=%(refname)', ...scopes]).toString();
   if (policy.forbidden.some((term) => refs.toLowerCase().includes(term.toLowerCase())))
     throw new Error('Publication history contains a restricted reference name');
-  const objects = git(['rev-list', '--objects', '--all'])
+  const revisions = allRefs ? ['--all'] : ['--branches', '--tags', '--remotes'];
+  const objects = git(['rev-list', '--objects', ...revisions, ...commits])
     .toString()
     .trim()
     .split('\n')

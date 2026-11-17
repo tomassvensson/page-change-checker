@@ -20,7 +20,7 @@ on:
 jobs:
   analyze:
     name: Analyze (javascript-typescript)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       security-events: write
@@ -50,7 +50,7 @@ jobs:
       - name: Install dependencies
         env:
           HUSKY: 0
-        run: npm ci
+        run: npm ci --engine-strict
 
       - name: Build TypeScript
         run: npm run build

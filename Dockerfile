@@ -9,7 +9,7 @@ WORKDIR /app
 ENV HUSKY=0
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --engine-strict
 
 COPY tsconfig.json ./
 COPY src/ ./src/

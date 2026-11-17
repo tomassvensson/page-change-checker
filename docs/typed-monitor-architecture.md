@@ -54,7 +54,7 @@ credentials, targets, browser profiles, deployment scripts and evidence outside 
 Public examples use reserved domains and generic resource names. A private
 `data/local-monitor/publication-policy.json` can define a `forbidden` string array
 without putting personal identifiers into the repository. Publication checks inspect
-the index before commits and all reachable history before pushes. CI enforces the
+the index before commits and all publishable history plus the outgoing commit before pushes. CI enforces the
 generic file, credential and example-host rules; personal checks require the local
 policy. Historical clones, forks and host-managed review snapshots require separate
 cleanup after a history rewrite. Collaborators should reclone the cleaned repository

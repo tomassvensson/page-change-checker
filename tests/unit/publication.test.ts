@@ -40,6 +40,12 @@ it('rejects restricted content in previous commits even after the final tree is 
     git(['add', 'item.txt']);
     commit();
     expect(() => checkPublicationHistory(root)).not.toThrow();
+    writeFileSync(join(root, 'private.txt'), 'private-marker');
+    const privateBlob = git(['hash-object', '-w', 'private.txt']).toString().trim();
+    git(['update-ref', 'refs/codex/private-marker', privateBlob]);
+    expect(() => checkPublicationHistory(root)).not.toThrow();
+    expect(() => checkPublicationHistory(root, true)).toThrow('reference name');
+    expect(() => checkPublicationHistory(root, false, [privateBlob])).toThrow('history rejected');
     writeFileSync(join(root, 'item.txt'), 'private-marker');
     git(['add', 'item.txt']);
     commit();

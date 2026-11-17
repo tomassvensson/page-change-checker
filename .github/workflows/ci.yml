@@ -19,7 +19,7 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -38,7 +38,15 @@ jobs:
       - name: Install dependencies
         env:
           HUSKY: 0
-        run: npm ci
+        run: npm ci --engine-strict
+
+      - name: Check CI configuration
+        run: npm run check:ci
+
+      - name: Check SonarCloud authentication before expensive checks
+        env:
+          SONAR_CLOUD_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: npm run check:sonar-auth
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
@@ -59,25 +67,8 @@ jobs:
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=300
 
-  yaml-lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-
-      - name: Validate YAML files
-        run: |
-          find . \
-            -name '*.yml' -o -name '*.yaml' \
-            | grep -v node_modules \
-            | grep -v coverage \
-            | xargs -I{} sh -c 'python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" {} && echo "OK: {}" || exit 1'
-
   windows-reliability:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -92,7 +83,7 @@ jobs:
       - name: Install dependencies
         env:
           HUSKY: 0
-        run: npm ci
+        run: npm ci --engine-strict
       - name: Build
         run: npm run build
       - name: Install Chromium for production-path regressions
@@ -105,7 +96,7 @@ jobs:
           monitorPipeline monitorRuntime cliDurability
 
   postgres-reliability:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
       postgres:
@@ -131,7 +122,7 @@ jobs:
       - name: Install dependencies
         env:
           HUSKY: 0
-        run: npm ci
+        run: npm ci --engine-strict
       - name: Exercise PostgreSQL rollback and retry
         env:
           PCC_TEST_PSQL: psql
@@ -139,7 +130,7 @@ jobs:
         run: npx vitest run tests/integration/monitorPostgres.test.ts
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -147,28 +138,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate docker-compose config
-        run: docker compose config --quiet
-
-      - name: Build Docker image
-        run: docker build --tag page-change-checker:ci .
-
-      - name: Verify non-root runtime and CLI startup
-        run: |
-          test "$(docker run --rm --entrypoint id page-change-checker:ci -u)" = "1000"
-          docker run --rm page-change-checker:ci --version
-
-      - name: Launch persistent Chromium under hardened runtime
-        run: >-
-          docker run --rm
-          --read-only
-          --cap-drop ALL
-          --security-opt no-new-privileges
-          --shm-size 1g
-          --tmpfs /tmp:rw,noexec,nosuid,size=256m
-          --tmpfs /home/node/.cache:rw,noexec,nosuid,size=128m
-          --tmpfs /home/node/.config:rw,noexec,nosuid,size=16m
-          --entrypoint node
-          page-change-checker:ci
-          --input-type=module
-          -e "import { chromium } from 'playwright'; const context = await chromium.launchPersistentContext('/tmp/profile', { headless: true }); const page = await context.newPage(); await page.goto('data:text/html,<h1>ok</h1>'); if (await page.textContent('h1') !== 'ok') process.exit(1); await context.close();"
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install check tooling
+        env:
+          HUSKY: 0
+        run: npm ci --engine-strict
+      - name: Exercise shared container checks
+        run: npm run check:docker

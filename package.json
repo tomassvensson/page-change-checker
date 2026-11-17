@@ -24,7 +24,11 @@
     "test:e2e": "playwright test",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "publication:check": "tsx src/tooling/check-publication.ts",
-    "verify:static": "npm run publication:check && npm run lint && npm run format:check && npm run build",
+    "check:ci": "tsx src/tooling/ciChecks.ts",
+    "check:docker": "tsx src/tooling/dockerCheck.ts",
+    "check:sonar-auth": "tsx src/tooling/sonarAuth.ts",
+    "prepush": "tsx src/tooling/prepush.ts",
+    "verify:static": "npm run publication:check && npm run check:ci && npm run lint && npm run format:check && npm run build",
     "verify": "npm run audit:prod && npm run verify:static && npm run test:coverage && npm run test:e2e",
     "prepare": "husky"
   },
@@ -53,6 +57,7 @@
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.26.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "yaml": "2.9.1"
   }
 }

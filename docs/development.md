@@ -13,7 +13,7 @@
 ```bash
 git clone https://github.com/tomassvensson/page-change-checker.git
 cd page-change-checker
-npm install          # installs dependencies and sets up Husky git hooks
+npm ci               # installs locked dependencies and sets up Husky git hooks
 npx playwright install chromium --with-deps
 cp config.example.json config.json   # edit config.json to your needs
 ```
@@ -88,20 +88,71 @@ npm run test:e2e
 npm run verify
 ```
 
-Coverage gates are calibrated to the measured suite (79% lines, 69% branches,
-80% functions, 77% statements). The core scraper, scheduler, and error model are
+Coverage minimums are 81% for lines, branches, functions and statements. The core scraper, scheduler, and error model are
 included rather than excluded. Coverage is reported to SonarCloud via `lcov.info`.
 
 ## Git hooks (Husky)
 
 Hooks are installed automatically by `npm install`.
 
-| Hook         | What runs                                            |
-| ------------ | ---------------------------------------------------- |
-| `pre-commit` | lint → format:check → build → unit+integration tests |
-| `pre-push`   | full `npm run verify` (includes coverage + E2E)      |
+| Hook         | What runs                                                                     |
+| ------------ | ----------------------------------------------------------------------------- |
+| `pre-commit` | lint → format:check → build → unit+integration tests                          |
+| `pre-push`   | outgoing main commit: clean installation, full verification and Docker checks |
 
 Re-install hooks manually with `npm run prepare`.
+
+### Main-only delivery and pre-push checks
+
+Work directly on `main`; the hook rejects updates to other branches or tags
+(deletions are allowed). Run `npm run prepush` manually to check committed `HEAD`.
+Uncommitted changes are intentionally excluded. Commit intended changes first.
+
+The hook checks publishable history plus the outgoing commit and whitespace, then
+exports committed files under ignored `data/prepush/`. In that snapshot it runs a
+fresh `npm ci`, production dependency audit, publication guard, strict YAML and
+action-pin checks, lockfile consistency, example configuration validation, filename
+case collisions, lint, formatting, TypeScript compilation, coverage and browser E2E.
+Snapshot hooks are disabled only during dependency installation, as in CI; the
+actual push gate remains mandatory. Snapshots are removed after checks. The report
+at `data/prepush/last-result.json` distinguishes running, failed and passed checks
+and identifies the checked commit.
+
+Docker uses the same checks locally and in CI: Compose validation, image build,
+non-root CLI and Chromium under the hardened read-only runtime. An unavailable
+daemon is explicitly reported, not counted as a pass. To require Docker and enable
+the native PostgreSQL TEMP-table regression, create ignored
+`data/local-monitor/prepush.json`:
+
+```json
+{
+  "requireDocker": true,
+  "postgres": {
+    "psqlPath": "/path/to/native/psql",
+    "user": "example",
+    "database": "example",
+    "port": 5432
+  }
+}
+```
+
+Use the native server's password file; never put passwords here. Omit `postgres`
+when no native test database is available. Tests use session-local temporary tables
+and do not alter permanent history. This computer can use its native server, not
+Docker PostgreSQL.
+
+Set `SONAR_CLOUD_TOKEN` locally to preflight Cloud authentication and analysis
+provisioning before expensive checks. Missing credentials produce a warning;
+supplied invalid credentials stop the push. The repository's `SONAR_TOKEN` secret
+must contain the same valid **Cloud** token, not a NAS token. Hooks cannot read
+GitHub secrets, so local success cannot guarantee remote authentication. CI repeats
+the preflight early and still requires the actual Sonar quality gate. NAS analysis
+is separate.
+
+Private tool checkpoint refs are not publishable history. The default guard scans
+heads, tags, remote-tracking refs and the outgoing commit; use
+`npm run publication:check -- --history --all-refs` for a full local ref audit.
+Never publish internal/private refs with `--mirror`.
 
 ## TypeScript conventions
 
@@ -123,7 +174,7 @@ Re-install hooks manually with `npm run prepare`.
 
 ## Linting and formatting
 
-ESLint is configured in `eslint.config.js` with the TypeScript plugin and import-order rules.
+ESLint is configured in `eslint.config.ts` with the TypeScript plugin and import-order rules.
 Prettier is configured via the `prettier` key in `package.json` (or `.prettierrc` if present).
 
 Run both together:
