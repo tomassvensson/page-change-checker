@@ -31,18 +31,15 @@ export function checkLockfile(pkg: unknown, lock: unknown) {
 }
 export function checkWorkflow(value: unknown) {
   const workflow = z
-    .object({
+    .looseObject({
       jobs: z.record(
         z.string(),
-        z
-          .object({
-            'timeout-minutes': z.number().positive(),
-            steps: z.array(z.object({ uses: z.string().optional() }).passthrough()).optional()
-          })
-          .passthrough()
+        z.looseObject({
+          'timeout-minutes': z.number().positive(),
+          steps: z.array(z.looseObject({ uses: z.string().optional() })).optional()
+        })
       )
     })
-    .passthrough()
     .parse(value);
   for (const job of Object.values(workflow.jobs)) {
     if (typeof job['runs-on'] === 'string' && job['runs-on'].endsWith('-latest'))

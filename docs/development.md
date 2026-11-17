@@ -118,6 +118,10 @@ actual push gate remains mandatory. Snapshots are removed after checks. The repo
 at `data/prepush/last-result.json` distinguishes running, failed and passed checks
 and identifies the checked commit.
 
+The snapshot isolates committed files, not untrusted code. Review unfamiliar
+changes and dependency install scripts before running them. Nested npm commands
+are explicitly bound to the snapshot, never the live monitor checkout.
+
 Docker uses the same checks locally and in CI: Compose validation, image build,
 non-root CLI and Chromium under the hardened read-only runtime. An unavailable
 daemon is explicitly reported, not counted as a pass. To require Docker and enable

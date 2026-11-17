@@ -24,6 +24,7 @@ import {
   runSnapshotChecks,
   snapshotEnvironment
 } from '../../src/tooling/prepush.js';
+import type { Command } from '../../src/tooling/prepush.js';
 import { checkSonarCloudAuth } from '../../src/tooling/sonarAuth.js';
 
 afterEach(() => {
@@ -83,7 +84,7 @@ it('checks Node, filename case, strict YAML, action pins and package-lock consis
 });
 it('validates tracked repository configuration', () => {
   quiet();
-  checkCiConfiguration();
+  expect(() => checkCiConfiguration()).not.toThrow();
 });
 it('does not expose Cloud token or response contents on any failure', async () => {
   quiet();
@@ -126,11 +127,12 @@ it('shares container build and hardened runtime assertions with CI', () => {
 });
 it('uses fresh locked dependencies and stops on required Docker or command failures', () => {
   quiet();
-  const run = vi.fn();
+  const run = vi.fn<Command>();
   expect(
     runSnapshotChecks('snapshot', {}, { requireDocker: true }, 'npm-cli.js', run, () => true)
   ).toBe(true);
   expect(run.mock.calls[0][1]).toContain('ci');
+  expect(run.mock.calls[0][1].slice(1, 3)).toEqual(['--prefix', 'snapshot']);
   expect(run.mock.calls[0][3]).toEqual({ HUSKY: '0' });
   expect(run.mock.calls[1][1]).toContain('verify');
   expect(run.mock.calls[2][1]).toContain('check:docker');
@@ -179,7 +181,16 @@ it('exports committed files, not dirty working files, without copying private da
     writeFileSync(join(root, '.gitignore'), 'data/\n');
     writeFileSync(join(root, 'item.txt'), 'committed');
     git(['add', '.gitignore', 'item.txt']);
-    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'Example']);
+    git([
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--no-gpg-sign',
+      '-qm',
+      'Example'
+    ]);
     writeFileSync(join(root, 'item.txt'), 'dirty');
     mkdirSync(join(root, 'data'));
     writeFileSync(join(root, 'data/private.txt'), 'private');

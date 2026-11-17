@@ -24,17 +24,7 @@ export type PushSettings = z.infer<typeof settingsSchema>;
 export type Command = (file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => void;
 export function gitEnvironment(source: NodeJS.ProcessEnv) {
   const env = { ...source };
-  for (const key of [
-    'GIT_DIR',
-    'GIT_WORK_TREE',
-    'GIT_INDEX_FILE',
-    'GIT_COMMON_DIR',
-    'GIT_OBJECT_DIRECTORY',
-    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-    'GIT_PREFIX',
-    'GIT_SHALLOW_FILE'
-  ])
-    delete env[key];
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
   return env;
 }
 const command: Command = (file, args, cwd, env) => {
@@ -132,11 +122,16 @@ export function runSnapshotChecks(
   run: Command = command,
   probe = dockerAvailable
 ) {
-  run(process.execPath, [npmCli, 'ci', '--engine-strict', '--no-audit', '--no-fund'], snapshot, {
-    ...env,
-    HUSKY: '0'
-  });
-  run(process.execPath, [npmCli, 'run', 'verify'], snapshot, env);
+  run(
+    process.execPath,
+    [npmCli, '--prefix', snapshot, 'ci', '--engine-strict', '--no-audit', '--no-fund'],
+    snapshot,
+    {
+      ...env,
+      HUSKY: '0'
+    }
+  );
+  run(process.execPath, [npmCli, '--prefix', snapshot, 'run', 'verify'], snapshot, env);
   if (!probe(env)) {
     if (settings.requireDocker)
       throw new Error('Docker is required for pre-push checks; start its daemon and retry');
@@ -145,7 +140,7 @@ export function runSnapshotChecks(
     );
     return false;
   }
-  run(process.execPath, [npmCli, 'run', 'check:docker'], snapshot, env);
+  run(process.execPath, [npmCli, '--prefix', snapshot, 'run', 'check:docker'], snapshot, env);
   return true;
 }
 export const prepushDependencies = {
