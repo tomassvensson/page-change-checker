@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 – Build
 # ---------------------------------------------------------------------------
-FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS build
+FROM node:26-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS build
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2 – Runtime
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS runtime
+FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS runtime
 
 WORKDIR /app
 
