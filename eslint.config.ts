@@ -8,10 +8,11 @@ export default tseslint.config(
       'dist/**',
       'data/**',
       '.trunk/**',
+      '.scannerwork/**',
       'coverage/**',
       'playwright-report/**',
       'node_modules/**',
-      'eslint.config.js',
+      'eslint.config.ts',
       'vitest.config.ts',
       'playwright.config.ts'
     ]

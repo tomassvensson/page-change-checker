@@ -60,12 +60,20 @@ export class MonitorJournal {
   private readonly db: Database.Database;
   private readonly ownsDatabase: boolean;
 
-  constructor(path: string | Database.Database) {
+  constructor(path: string | Database.Database, options: { readOnly?: boolean } = {}) {
     this.ownsDatabase = typeof path === 'string';
-    this.db = typeof path === 'string' ? new Database(path) : path;
+    this.db =
+      typeof path === 'string'
+        ? new Database(path, {
+            readonly: options.readOnly ?? false,
+            fileMustExist: options.readOnly ?? false,
+            timeout: 5000
+          })
+        : path;
+    this.db.pragma('busy_timeout = 5000');
+    if (this.db.readonly) return;
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = FULL');
-    this.db.pragma('busy_timeout = 5000');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS monitor_checks (
         id INTEGER PRIMARY KEY, target TEXT NOT NULL, started TEXT NOT NULL,
@@ -610,7 +618,7 @@ export class MonitorJournal {
       const registered =
         [configured?.registered, earliest.at]
           .filter((v): v is string => Boolean(v))
-          .sort()
+          .sort((a, b) => a.localeCompare(b))
           .at(0) ?? since;
       return {
         target,

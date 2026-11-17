@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 
 import { imagesReady, pageValidity } from './journal.js';
+import type { StageObserver } from './pipeline.js';
 import {
   acceptedObservations,
   compareSignatures,
@@ -18,6 +19,8 @@ export interface CaptureOptions {
   authenticatedSelector?: string;
   recoverAuthentication?: () => Promise<void>;
   requiredStatistics?: string[];
+  authenticateSession?: () => Promise<boolean>;
+  onStage?: StageObserver;
   title?: (title: string) => string;
   timeoutMs?: number;
   preScreenshotWaitMs?: number;
@@ -341,13 +344,41 @@ export async function capturePage(
 }
 
 /** Production orchestration, reused unchanged by local deployment and fixtures. */
+async function preparePage(page: Page, options: CaptureOptions): Promise<number | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    options.onStage?.('load');
+    let status = await options.navigate();
+    options.onStage?.('authenticate');
+    if (await options.authenticateSession?.()) {
+      options.onStage?.('load');
+      status = await options.navigate();
+    }
+    options.onStage?.('validate-readiness');
+    try {
+      await validate(page, status, options);
+    } catch (error) {
+      if (attempt !== 0) throw error;
+      if (error instanceof CaptureAuthenticationError && options.recoverAuthentication)
+        await options.recoverAuthentication();
+      else if (!(error instanceof CaptureReadinessError)) throw error;
+      continue;
+    }
+    options.onStage?.('capture');
+    return status;
+  }
+  throw new Error('Page preparation exhausted; baseline retained');
+}
+
 export async function runRuleCheck(
   page: Page,
   rules: MonitorRule[],
   baseline: Record<string, Observation>,
   options: CaptureOptions
 ) {
-  const first = await capturePage(page, rules, await options.navigate(), options);
+  const prepare = () => preparePage(page, options);
+  const pipelineOptions = { ...options, navigate: prepare };
+  const first = await capturePage(page, rules, await prepare(), pipelineOptions);
+  options.onStage?.('confirm-change');
   let decisions = evaluateEvidence(rules, first.evidence, baseline),
     bundle = first;
   const confirmationNeeded = decisions.some(
@@ -355,7 +386,8 @@ export async function runRuleCheck(
   );
   if (confirmationNeeded) {
     await page.waitForTimeout(options.confirmationWaitMs ?? 10000);
-    bundle = await capturePage(page, rules, await options.navigate(), options);
+    bundle = await capturePage(page, rules, await prepare(), pipelineOptions);
+    options.onStage?.('confirm-change');
     decisions = confirmEvidence(rules, first.evidence, bundle.evidence, baseline);
   } else decisions = decisions.map((d) => ({ ...d, confirmed: d.valid }));
   return {

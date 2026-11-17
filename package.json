@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/cli/index.js run",
+    "monitor": "node dist/src/monitor/local.js",
     "dev": "tsx src/cli/index.ts",
     "scrape": "tsx src/cli/index.ts run",
     "schedule": "tsx src/cli/index.ts schedule",
@@ -46,6 +47,7 @@
     "eslint": "^10.4.0",
     "eslint-plugin-import-x": "^4.8.0",
     "husky": "^9.1.7",
+    "jiti": "^2.7.0",
     "prettier": "^3.5.3",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",

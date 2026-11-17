@@ -21,7 +21,7 @@ export default defineConfig({
         'tests/**',
         '.trunk/**',
         'playwright.config.ts',
-        'eslint.config.js',
+        'eslint.config.ts',
         'vitest.config.ts',
         'src/index.ts',
         'src/cli/index.ts',
