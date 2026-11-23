@@ -38,13 +38,13 @@
     "diff": "^9.0.0",
     "ipaddr.js": "^2.4.0",
     "nodemailer": "^10.6.0",
-    "playwright": "^1.51.1",
+    "playwright": "^1.65.1",
     "safe-regex2": "^5.1.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.51.1",
+    "@playwright/test": "^1.65.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.20.1",
     "@types/nodemailer": "^8.0.1",
